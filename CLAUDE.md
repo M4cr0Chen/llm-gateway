@@ -191,6 +191,10 @@ Before working on a specific area, read the corresponding design document:
 | Understand the full architecture | `docs/architecture.md` |
 | Understand the API contract | `docs/api-spec.md` |
 
+Side Notes on Development:
+
+- Don't add signature in commit messages/pr. The messages should only focus on the work, not authorship.
+
 ## Current Status
 
 - [ ] Milestone 0: Documentation Bootstrap ← CURRENT
