@@ -16,6 +16,8 @@ type ChatCompletionRequest struct {
 }
 
 // Message represents a chat message.
+// TODO: Content should support both string and []ContentPart (array of text/image_url)
+// to handle multimodal requests. For now, string-only is sufficient.
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
