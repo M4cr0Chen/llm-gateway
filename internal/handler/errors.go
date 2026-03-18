@@ -36,5 +36,5 @@ func handleProviderError(w http.ResponseWriter, err error) {
 		return
 	}
 
-	writeError(w, http.StatusBadGateway, "upstream_error", "provider_error", err.Error())
+	writeError(w, http.StatusBadGateway, "upstream_error", "provider_error", "upstream provider error")
 }

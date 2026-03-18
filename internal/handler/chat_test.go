@@ -232,4 +232,73 @@ func TestHandleChatCompletion_GenericError(t *testing.T) {
 	w := doRequest(t, ch.HandleChatCompletion, validRequest())
 
 	assert.Equal(t, http.StatusBadGateway, w.Code)
+	var apiErr model.APIError
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &apiErr))
+	assert.Equal(t, "upstream provider error", apiErr.Error.Message, "should not leak internal error details")
+}
+
+func TestHandleChatCompletion_RequestTooLarge(t *testing.T) {
+	mock := &mockProvider{name: "test", models: []string{"test-model"}}
+	ch := handler.NewChatHandler(newTestRegistry(mock))
+
+	// Build a valid-shaped JSON body that exceeds 10MB via a large content field.
+	padding := strings.Repeat("x", 11<<20)
+	body := fmt.Sprintf(`{"model":"test-model","messages":[{"role":"user","content":"%s"}]}`, padding)
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	ch.HandleChatCompletion(w, r)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	var apiErr model.APIError
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &apiErr))
+	assert.Equal(t, "request_too_large", apiErr.Error.Code)
+}
+
+func TestHandleChatCompletion_StreamMidStreamError(t *testing.T) {
+	stop := "stop"
+	chunks := []model.ChatCompletionChunk{
+		{ID: "chatcmpl-123", Object: "chat.completion.chunk", Created: 1700000000, Model: "test-model",
+			Choices: []model.ChunkChoice{{Index: 0, Delta: model.DeltaMessage{Content: "hi"}, FinishReason: &stop}}},
+	}
+	mock := &mockProvider{name: "test", models: []string{"test-model"}}
+
+	// Override ChatCompletionStream to inject an error mid-stream.
+	reg := newTestRegistry(mock)
+	errMock := &midStreamErrProvider{chunks: chunks, midErr: fmt.Errorf("connection reset")}
+	reg.Register(errMock, errMock.Models())
+
+	ch := handler.NewChatHandler(reg)
+	req := validRequest()
+	req.Stream = true
+	w := doRequest(t, ch.HandleChatCompletion, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	// Should contain the first chunk and then [DONE], not hang
+	assert.Contains(t, body, "data: ")
+	assert.Contains(t, body, "data: [DONE]")
+}
+
+// midStreamErrProvider sends chunks then an error event.
+type midStreamErrProvider struct {
+	chunks []model.ChatCompletionChunk
+	midErr error
+}
+
+func (m *midStreamErrProvider) Name() string    { return "test" }
+func (m *midStreamErrProvider) Models() []string { return []string{"test-model"} }
+
+func (m *midStreamErrProvider) ChatCompletion(_ context.Context, _ *model.ChatCompletionRequest) (*model.ChatCompletionResponse, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *midStreamErrProvider) ChatCompletionStream(_ context.Context, _ *model.ChatCompletionRequest) (<-chan provider.StreamEvent, error) {
+	ch := make(chan provider.StreamEvent, len(m.chunks)+1)
+	for i := range m.chunks {
+		ch <- provider.StreamEvent{Chunk: &m.chunks[i]}
+	}
+	ch <- provider.StreamEvent{Err: m.midErr}
+	close(ch)
+	return ch, nil
 }

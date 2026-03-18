@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -20,10 +21,20 @@ func NewChatHandler(registry *provider.Registry) *ChatHandler {
 	return &ChatHandler{registry: registry}
 }
 
+// maxRequestBodySize is the maximum allowed request body size (10 MB).
+const maxRequestBodySize = 10 << 20
+
 // HandleChatCompletion handles both streaming and non-streaming chat completions.
 func (h *ChatHandler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
+
 	var req model.ChatCompletionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if isMaxBytesError(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "request_too_large",
+				"request body exceeds 10MB limit")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request",
 			fmt.Sprintf("invalid request body: %v", err))
 		return
@@ -92,12 +103,17 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, p pro
 	for evt := range ch {
 		if evt.Err != nil {
 			logger.Warn("stream error from provider", "error", evt.Err, "provider", p.Name())
+			// Drain remaining events to unblock the provider goroutine.
+			for range ch {
+			}
 			break
 		}
 
 		data, err := json.Marshal(evt.Chunk)
 		if err != nil {
 			logger.Warn("failed to marshal chunk", "error", err)
+			for range ch {
+			}
 			break
 		}
 
@@ -110,4 +126,10 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, p pro
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
 	}
+}
+
+// isMaxBytesError reports whether err was caused by exceeding the MaxBytesReader limit.
+func isMaxBytesError(err error) bool {
+	var maxBytesErr *http.MaxBytesError
+	return errors.As(err, &maxBytesErr)
 }
