@@ -161,7 +161,7 @@ func (p *Provider) ChatCompletionStream(ctx context.Context, req *model.ChatComp
 			data := strings.TrimPrefix(line, "data: ")
 			if data == "[DONE]" {
 				gotDone = true
-				return
+				break
 			}
 
 			var chunk model.ChatCompletionChunk
@@ -180,12 +180,15 @@ func (p *Provider) ChatCompletionStream(ctx context.Context, req *model.ChatComp
 			}
 		}
 
+		if gotDone {
+			return
+		}
 		if err := scanner.Err(); err != nil {
 			select {
 			case ch <- provider.StreamEvent{Err: fmt.Errorf("reading stream: %w", err)}:
 			case <-ctx.Done():
 			}
-		} else if !gotDone {
+		} else {
 			select {
 			case ch <- provider.StreamEvent{Err: fmt.Errorf("reading stream: unexpected EOF without [DONE]")}:
 			case <-ctx.Done():
