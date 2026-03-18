@@ -110,6 +110,8 @@ func (p *Provider) ChatCompletion(ctx context.Context, req *model.ChatCompletion
 
 // ChatCompletionStream sends a streaming chat completion request to OpenAI.
 // The returned channel emits StreamEvents and is always closed when the stream ends.
+// The caller must either cancel the context or fully drain the channel to avoid
+// leaking the background goroutine that reads from the HTTP response.
 func (p *Provider) ChatCompletionStream(ctx context.Context, req *model.ChatCompletionRequest) (<-chan provider.StreamEvent, error) {
 	body, err := json.Marshal(openaiRequest{ChatCompletionRequest: req, Stream: true})
 	if err != nil {
@@ -143,6 +145,7 @@ func (p *Provider) ChatCompletionStream(ctx context.Context, req *model.ChatComp
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
+		gotDone := false
 		for scanner.Scan() {
 			select {
 			case <-ctx.Done():
@@ -157,6 +160,7 @@ func (p *Provider) ChatCompletionStream(ctx context.Context, req *model.ChatComp
 
 			data := strings.TrimPrefix(line, "data: ")
 			if data == "[DONE]" {
+				gotDone = true
 				return
 			}
 
@@ -179,6 +183,11 @@ func (p *Provider) ChatCompletionStream(ctx context.Context, req *model.ChatComp
 		if err := scanner.Err(); err != nil {
 			select {
 			case ch <- provider.StreamEvent{Err: fmt.Errorf("reading stream: %w", err)}:
+			case <-ctx.Done():
+			}
+		} else if !gotDone {
+			select {
+			case ch <- provider.StreamEvent{Err: fmt.Errorf("reading stream: unexpected EOF without [DONE]")}:
 			case <-ctx.Done():
 			}
 		}

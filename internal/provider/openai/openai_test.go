@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/M4cr0Chen/llm-gateway/internal/model"
+	"github.com/M4cr0Chen/llm-gateway/internal/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -234,4 +235,33 @@ func TestChatCompletion_Error500_NonJSON(t *testing.T) {
 	assert.True(t, pe.Retryable)
 	assert.Contains(t, pe.Message, "internal server error")
 	assert.Equal(t, "upstream_error", pe.Type)
+}
+
+func TestChatCompletionStream_UnexpectedEOF(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, ok := w.(http.Flusher)
+		require.True(t, ok)
+
+		// Send one chunk then close without [DONE]
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-abc123\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n")
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	p := New(Config{APIKey: "test-key", BaseURL: server.URL, Models: []string{"gpt-4o"}})
+
+	ch, err := p.ChatCompletionStream(context.Background(), testRequest())
+	require.NoError(t, err)
+
+	var events []provider.StreamEvent
+	for event := range ch {
+		events = append(events, event)
+	}
+
+	require.Len(t, events, 2)
+	assert.Nil(t, events[0].Err)
+	assert.Equal(t, "Hi", events[0].Chunk.Choices[0].Delta.Content)
+	require.Error(t, events[1].Err)
+	assert.Contains(t, events[1].Err.Error(), "unexpected EOF without [DONE]")
 }
