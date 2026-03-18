@@ -61,3 +61,24 @@ func (r *Registry) listModelsLocked() []string {
 	sort.Strings(names)
 	return names
 }
+
+// ModelInfo pairs a model name with its provider name.
+type ModelInfo struct {
+	ModelName    string
+	ProviderName string
+}
+
+// ListModelDetails returns details for all registered models, sorted by model name.
+func (r *Registry) ListModelDetails() []ModelInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	infos := make([]ModelInfo, 0, len(r.models))
+	for name, p := range r.models {
+		infos = append(infos, ModelInfo{ModelName: name, ProviderName: p.Name()})
+	}
+	sort.Slice(infos, func(i, j int) bool {
+		return infos[i].ModelName < infos[j].ModelName
+	})
+	return infos
+}

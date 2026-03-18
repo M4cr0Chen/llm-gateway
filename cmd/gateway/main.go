@@ -1,26 +1,37 @@
 package main
 
 import (
-	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	"github.com/M4cr0Chen/llm-gateway/internal/provider"
+	"github.com/M4cr0Chen/llm-gateway/internal/provider/openai"
+	"github.com/M4cr0Chen/llm-gateway/internal/server"
 )
 
 func main() {
-	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
-	r.Use(middleware.Recoverer)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		logger.Error("OPENAI_API_KEY is required")
+		os.Exit(1)
+	}
+
+	registry := provider.NewRegistry()
+
+	openaiProvider := openai.New(openai.Config{
+		APIKey: apiKey,
+		Models: []string{"gpt-4o", "gpt-4o-mini"},
 	})
+	registry.Register(openaiProvider, openaiProvider.Models())
 
-	log.Println("starting llm-gateway on :8080")
-	if err := http.ListenAndServe(":8080", r); err != nil {
-		log.Fatal(err)
+	srv := server.New(registry, logger)
+
+	logger.Info("starting llm-gateway", slog.String("addr", ":8080"))
+	if err := http.ListenAndServe(":8080", srv.Handler); err != nil {
+		logger.Error("server stopped", "error", err)
+		os.Exit(1)
 	}
 }
