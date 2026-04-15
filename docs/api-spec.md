@@ -268,7 +268,8 @@ server:
 
 providers:
   openai:
-    api_key: "${OPENAI_API_KEY}"
+    # API keys are set via env vars only, never in YAML:
+    #   GATEWAY_PROVIDERS__OPENAI__API_KEY=sk-xxx
     base_url: "https://api.openai.com/v1"
     timeout: 30s
     max_retries: 2
@@ -277,7 +278,7 @@ providers:
       - gpt-4o
       - gpt-4o-mini
   anthropic:
-    api_key: "${ANTHROPIC_API_KEY}"
+    # GATEWAY_PROVIDERS__ANTHROPIC__API_KEY=sk-ant-xxx
     base_url: "https://api.anthropic.com"
     timeout: 30s
     max_retries: 2
@@ -285,7 +286,7 @@ providers:
       - claude-sonnet-4-20250514
       - claude-haiku-35-20241022
   google:
-    api_key: "${GOOGLE_API_KEY}"
+    # GATEWAY_PROVIDERS__GOOGLE__API_KEY=AIza-xxx
     timeout: 30s
     models:
       - gemini-2.0-flash
