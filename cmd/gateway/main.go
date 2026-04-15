@@ -1,37 +1,85 @@
 package main
 
 import (
+	"fmt"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
 
+	"github.com/M4cr0Chen/llm-gateway/internal/config"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider/openai"
 	"github.com/M4cr0Chen/llm-gateway/internal/server"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		logger.Error("OPENAI_API_KEY is required")
-		os.Exit(1)
+	configPath := os.Getenv("GATEWAY_CONFIG_PATH")
+	if configPath == "" {
+		configPath = "configs/gateway.yaml"
 	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		log.Fatalf("failed to load config: %v", err)
+	}
+
+	setupLogger(cfg.Log)
 
 	registry := provider.NewRegistry()
-
-	openaiProvider := openai.New(openai.Config{
-		APIKey: apiKey,
-		Models: []string{"gpt-4o", "gpt-4o-mini"},
-	})
-	registry.Register(openaiProvider, openaiProvider.Models())
-
-	srv := server.New(registry, logger)
-
-	logger.Info("starting llm-gateway", slog.String("addr", ":8080"))
-	if err := http.ListenAndServe(":8080", srv.Handler); err != nil {
-		logger.Error("server stopped", "error", err)
-		os.Exit(1)
+	for name, provCfg := range cfg.Providers {
+		if provCfg.APIKey == "" {
+			slog.Warn("skipping provider with no API key", "provider", name)
+			continue
+		}
+		switch name {
+		case "openai":
+			p := openai.New(openai.Config{
+				APIKey:  provCfg.APIKey,
+				BaseURL: provCfg.BaseURL,
+				Timeout: provCfg.Timeout,
+				Models:  provCfg.Models,
+			})
+			registry.Register(p, p.Models())
+		default:
+			slog.Warn("unknown provider, skipping", "provider", name)
+		}
 	}
+
+	srv := server.New(registry, slog.Default())
+
+	addr := fmt.Sprintf(":%d", cfg.Server.Port)
+	httpServer := &http.Server{
+		Addr:         addr,
+		Handler:      srv.Handler,
+		ReadTimeout:  cfg.Server.ReadTimeout,
+		WriteTimeout: cfg.Server.WriteTimeout,
+	}
+
+	slog.Info("starting llm-gateway", "addr", addr)
+	if err := httpServer.ListenAndServe(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func setupLogger(cfg config.LogConfig) {
+	var level slog.Level
+	switch cfg.Level {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+
+	var handler slog.Handler
+	if cfg.Format == "text" {
+		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})
+	} else {
+		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
+	}
+	slog.SetDefault(slog.New(handler))
 }
