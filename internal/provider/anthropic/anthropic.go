@@ -193,13 +193,15 @@ func mapStopReason(reason string) string {
 }
 
 func (p *Provider) translateResponse(resp anthropicResponse) *model.ChatCompletionResponse {
-	content := ""
+	// Concatenate all text content blocks. Anthropic may return multiple text
+	// blocks when tool_use is added; for now there is typically one.
+	var textParts []string
 	for _, c := range resp.Content {
 		if c.Type == "text" {
-			content = c.Text
-			break
+			textParts = append(textParts, c.Text)
 		}
 	}
+	content := strings.Join(textParts, "")
 
 	return &model.ChatCompletionResponse{
 		ID:      resp.ID,
@@ -278,6 +280,7 @@ func (p *Provider) ChatCompletionStream(ctx context.Context, req *model.ChatComp
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	p.setHeaders(httpReq)
+	httpReq.Header.Set("Accept", "text/event-stream")
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
@@ -330,7 +333,7 @@ func (p *Provider) ChatCompletionStream(ctx context.Context, req *model.ChatComp
 			case "message_start":
 				var ev messageStartEvent
 				if err := json.Unmarshal([]byte(data), &ev); err != nil {
-					p.sendErr(ch, ctx, fmt.Errorf("decoding message_start: %w", err))
+					sendErr(ctx, ch, fmt.Errorf("decoding message_start: %w", err))
 					return
 				}
 				msgID = ev.Message.ID
@@ -340,7 +343,7 @@ func (p *Provider) ChatCompletionStream(ctx context.Context, req *model.ChatComp
 			case "content_block_delta":
 				var ev contentBlockDeltaEvent
 				if err := json.Unmarshal([]byte(data), &ev); err != nil {
-					p.sendErr(ch, ctx, fmt.Errorf("decoding content_block_delta: %w", err))
+					sendErr(ctx, ch, fmt.Errorf("decoding content_block_delta: %w", err))
 					return
 				}
 				if ev.Delta.Type != "text_delta" {
@@ -369,7 +372,7 @@ func (p *Provider) ChatCompletionStream(ctx context.Context, req *model.ChatComp
 			case "message_delta":
 				var ev messageDeltaEvent
 				if err := json.Unmarshal([]byte(data), &ev); err != nil {
-					p.sendErr(ch, ctx, fmt.Errorf("decoding message_delta: %w", err))
+					sendErr(ctx, ch, fmt.Errorf("decoding message_delta: %w", err))
 					return
 				}
 				finishReason := mapStopReason(ev.Delta.StopReason)
@@ -403,9 +406,9 @@ func (p *Provider) ChatCompletionStream(ctx context.Context, req *model.ChatComp
 		}
 
 		if err := scanner.Err(); err != nil {
-			p.sendErr(ch, ctx, fmt.Errorf("reading stream: %w", err))
+			sendErr(ctx, ch, fmt.Errorf("reading stream: %w", err))
 		} else {
-			p.sendErr(ch, ctx, fmt.Errorf("reading stream: unexpected EOF without message_stop"))
+			sendErr(ctx, ch, fmt.Errorf("reading stream: unexpected EOF without message_stop"))
 		}
 	}()
 
@@ -420,7 +423,7 @@ func (p *Provider) setHeaders(req *http.Request) {
 	req.Header.Set("anthropic-version", apiVersion)
 }
 
-func (p *Provider) sendErr(ch chan<- provider.StreamEvent, ctx context.Context, err error) {
+func sendErr(ctx context.Context, ch chan<- provider.StreamEvent, err error) {
 	select {
 	case ch <- provider.StreamEvent{Err: err}:
 	case <-ctx.Done():
