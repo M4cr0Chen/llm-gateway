@@ -296,7 +296,7 @@ Phase 3: 收尾
 4. **接口定义集中在少数文件** — `internal/provider/provider.go`、`internal/router/router.go` 等，agent 读几个文件就能理解系统边界
 5. **每个 PR 合并后在 issue 中留 comment 总结实际实现** — 下一个 issue 的 agent 可以快速了解前置工作的结果
 
-### 落地计划: Milestone 0 — Documentation Bootstrap
+### Milestone 0 — Documentation Bootstrap (已完成✅)
 
 在开始 Milestone 1 开发前，先完成以下文档搭建工作：
 
@@ -324,7 +324,7 @@ Phase 3: 收尾
 
 ---
 
-## Milestone 1: Transparent Proxy (Foundation)
+## Milestone 1: Transparent Proxy (Foundation) (已完成 ✅)
 
 **Goal**: 最小可用代理 — 接收 OpenAI 格式请求，转发到 OpenAI，返回响应。
 

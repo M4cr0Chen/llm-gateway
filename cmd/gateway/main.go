@@ -9,6 +9,7 @@ import (
 
 	"github.com/M4cr0Chen/llm-gateway/internal/config"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider"
+	"github.com/M4cr0Chen/llm-gateway/internal/provider/anthropic"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider/openai"
 	"github.com/M4cr0Chen/llm-gateway/internal/server"
 )
@@ -36,6 +37,14 @@ func main() {
 		switch name {
 		case "openai":
 			p := openai.New(openai.Config{
+				APIKey:  provCfg.APIKey,
+				BaseURL: provCfg.BaseURL,
+				Timeout: provCfg.Timeout,
+				Models:  provCfg.Models,
+			})
+			registry.Register(p, p.Models())
+		case "anthropic":
+			p := anthropic.New(anthropic.Config{
 				APIKey:  provCfg.APIKey,
 				BaseURL: provCfg.BaseURL,
 				Timeout: provCfg.Timeout,

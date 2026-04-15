@@ -11,6 +11,22 @@ providers:
       - gpt-4o
       - gpt-4o-mini
       - gpt-3.5-turbo
+  anthropic:
+    base_url: "https://api.anthropic.com"
+    timeout: 30s
+    models:
+      - claude-sonnet-4-20250514
+      - claude-haiku-35-20241022
+  # google:
+  #   timeout: 30s
+  #   models:
+  #     - gemini-2.0-flash
+  #     - gemini-2.0-pro
+
+# model_aliases:
+#   "gpt4": "gpt-4o"
+#   "claude": "claude-sonnet-4-20250514"
+#   "gemini": "gemini-2.0-flash"
 
 log:
   level: info

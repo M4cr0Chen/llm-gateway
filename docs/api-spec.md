@@ -2,6 +2,23 @@
 
 The gateway exposes an **OpenAI-compatible API**. Any client that works with the OpenAI API should work with this gateway by only changing the base URL.
 
+## Implementation Status
+
+| Endpoint | Status | Milestone |
+|----------|--------|-----------|
+| `POST /v1/chat/completions` | Implemented | M1 |
+| `GET /v1/models` | Implemented | M1 |
+| `GET /health` | Implemented | M1 |
+| `GET /internal/health` | Planned | M2 |
+| `POST /internal/admin/keys` | Planned | M3 |
+| `DELETE /internal/admin/keys/{id}` | Planned | M3 |
+| `GET /internal/admin/usage` | Planned | M6 |
+| `GET /internal/admin/cache/stats` | Planned | M5 |
+| `GET /internal/admin/budgets` | Planned | M6 |
+| `PUT /internal/admin/budgets/{org_id}` | Planned | M6 |
+| `GET /internal/admin/experiments/{name}/stats` | Planned | M4 |
+| `GET /internal/admin/analytics/usage` | Planned | M7 |
+
 ## Public Endpoints
 
 ### POST /v1/chat/completions
@@ -10,9 +27,9 @@ Create a chat completion. Supports both streaming and non-streaming modes.
 
 **Request Headers:**
 ```
-Authorization: Bearer sk-gateway-xxxx
+Authorization: Bearer sk-gateway-xxxx    # validated by Auth middleware (planned M3)
 Content-Type: application/json
-X-Cache-Control: no-cache          # optional, bypass semantic cache
+X-Cache-Control: no-cache                # optional, bypass semantic cache (planned M5)
 ```
 
 **Request Body:**
@@ -36,9 +53,9 @@ X-Cache-Control: no-cache          # optional, bypass semantic cache
 ```
 
 **Model field behavior:**
-- Specific model name (e.g., `"gpt-4o"`, `"claude-sonnet-4-20250514"`) → routes to the provider that serves this model
-- Model alias (e.g., `"claude"`) → resolves via `model_aliases` config
-- Model group (e.g., `"fast"`, `"smart"`) → router selects best provider based on strategy
+- Specific model name (e.g., `"gpt-4o"`, `"claude-sonnet-4-20250514"`) → routes to the provider that serves this model (implemented M1)
+- Model alias (e.g., `"claude"`) → resolves via `model_aliases` config (planned M2)
+- Model group (e.g., `"fast"`, `"smart"`) → router selects best provider based on strategy (planned M4)
 
 **Non-streaming response (200 OK):**
 ```json
@@ -81,18 +98,18 @@ data: [DONE]
 
 **Gateway-specific response headers:**
 ```
-X-Request-ID: req-uuid-here
-X-LLM-Gateway-Provider: openai          # which provider served the request
-X-LLM-Gateway-Attempts: 1              # number of provider attempts (>1 if fallback)
-X-Cache: HIT | MISS | BYPASS           # semantic cache status
-X-Cache-Lookup-Time: 5ms               # cache lookup duration
-X-Cost-USD: 0.000375                   # estimated cost of this request
-X-Tokens-Input: 20                     # input token count
-X-Tokens-Output: 9                     # output token count
-X-RateLimit-Limit-Requests: 60         # RPM limit
-X-RateLimit-Remaining-Requests: 42     # remaining requests this window
-X-RateLimit-Reset-Requests: 30s        # time until RPM window resets
-X-Budget-Warning: 85% of monthly budget used  # only when near budget
+X-Request-ID: req-uuid-here               # implemented (M1)
+X-LLM-Gateway-Provider: openai            # implemented (M1)
+X-LLM-Gateway-Attempts: 1                 # planned (M4, fallback routing)
+X-Cache: HIT | MISS | BYPASS              # planned (M5, semantic cache)
+X-Cache-Lookup-Time: 5ms                  # planned (M5)
+X-Cost-USD: 0.000375                      # planned (M6, token accounting)
+X-Tokens-Input: 20                        # planned (M6)
+X-Tokens-Output: 9                        # planned (M6)
+X-RateLimit-Limit-Requests: 60            # planned (M3, rate limiting)
+X-RateLimit-Remaining-Requests: 42        # planned (M3)
+X-RateLimit-Reset-Requests: 30s           # planned (M3)
+X-Budget-Warning: 85% of monthly budget used  # planned (M6)
 ```
 
 ### GET /v1/models
