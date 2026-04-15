@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -20,7 +21,7 @@ func Load(path string) (*Config, error) {
 
 	// 1. Load from YAML file (missing file is OK).
 	if err := k.Load(file.Provider(path), yaml.Parser()); err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("loading config file: %w", err)
 		}
 	}

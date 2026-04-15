@@ -9,4 +9,3 @@ services:
       - ../../.env
     volumes:
       - ../../configs:/configs:ro
-    command: ["/gateway"]

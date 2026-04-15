@@ -21,6 +21,7 @@ func main() {
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
+		// Use log.Fatalf because slog is not configured until after config is loaded.
 		log.Fatalf("failed to load config: %v", err)
 	}
 
