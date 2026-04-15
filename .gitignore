@@ -1,4 +1,5 @@
 bin/
+gateway
 *.exe
 .env
 *.env.local

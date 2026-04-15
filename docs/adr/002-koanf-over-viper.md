@@ -19,7 +19,7 @@ Use [koanf](https://github.com/knadh/koanf).
 
 ## Consequences
 - Config loading is explicit: create a `koanf.New()` instance, load providers in order
-- Environment variables follow a convention: `GATEWAY_SERVER_PORT` maps to `server.port`
+- Environment variables use `__` (double underscore) as hierarchy separator: `GATEWAY_SERVER__PORT` maps to `server.port`. Single underscores are kept literal for compound keys like `api_key`.
 - Config struct defined in `internal/config/config.go` with struct tags
 - Hot-reload possible via file watcher, but not implemented initially
 

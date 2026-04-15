@@ -156,7 +156,7 @@ type Limiter interface {
 - **Logging**: Use `slog` from request context. Never log message content (PII) at INFO level. DEBUG only with `log.debug_bodies: true`.
 - **Testing**: Table-driven tests. Use `testify/assert`. Mock HTTP servers with `httptest.Server`. Use `testify/require` for fatal assertions.
 - **Middleware**: Standard Go signature `func(http.Handler) http.Handler`.
-- **Configuration**: All config via `configs/gateway.yaml` + env var overrides. Env vars: `GATEWAY_SERVER_PORT`, `GATEWAY_PROVIDERS_OPENAI_API_KEY`, etc.
+- **Configuration**: All config via `configs/gateway.yaml` + env var overrides. Env vars use `__` (double underscore) as hierarchy separator: `GATEWAY_SERVER__PORT`, `GATEWAY_PROVIDERS__OPENAI__API_KEY`, etc. Secrets (API keys) must only be set via env vars, never in YAML.
 - **Dependencies**: Prefer stdlib. Only add external dependencies when they provide clear value.
 - **Streaming**: Use `<-chan StreamEvent` for provider → handler communication. Always respect `ctx.Done()`.
 

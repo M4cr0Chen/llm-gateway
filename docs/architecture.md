@@ -138,7 +138,7 @@ configs/gateway.yaml        ← base configuration (committed to repo)
      ▲
      │ overridden by
      │
-Environment variables       ← per-environment overrides (GATEWAY_SERVER_PORT, etc.)
+Environment variables       ← per-environment overrides (GATEWAY_SERVER__PORT, GATEWAY_PROVIDERS__OPENAI__API_KEY, etc.)
      ▲
      │ overridden by
      │
