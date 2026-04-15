@@ -11,12 +11,12 @@ providers:
       - gpt-4o
       - gpt-4o-mini
       - gpt-3.5-turbo
-  # anthropic:
-  #   base_url: "https://api.anthropic.com"
-  #   timeout: 30s
-  #   models:
-  #     - claude-sonnet-4-20250514
-  #     - claude-haiku-35-20241022
+  anthropic:
+    base_url: "https://api.anthropic.com"
+    timeout: 30s
+    models:
+      - claude-sonnet-4-20250514
+      - claude-haiku-35-20241022
   # google:
   #   timeout: 30s
   #   models:
