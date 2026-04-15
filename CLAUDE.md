@@ -197,9 +197,9 @@ Side Notes on Development:
 
 ## Current Status
 
-- [ ] Milestone 0: Documentation Bootstrap ← CURRENT
-- [ ] Milestone 1: Transparent Proxy (Foundation)
-- [ ] Milestone 2: Multi-Provider Support
+- [x] Milestone 0: Documentation Bootstrap
+- [x] Milestone 1: Transparent Proxy (Foundation)
+- [ ] Milestone 2: Multi-Provider Support ← CURRENT
 - [ ] Milestone 3: Auth, Rate Limiting & Observability
 - [ ] Milestone 4: Smart Router with Fallback & A/B Routing
 - [ ] Milestone 5: Semantic Cache

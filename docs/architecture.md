@@ -45,6 +45,8 @@ LLM Gateway is a reverse proxy that sits between client applications and LLM pro
         │→ Emit Prometheus metrics
 ```
 
+> **Implementation Note (post-M1):** Currently implemented steps: RequestID middleware, Logging middleware, Chat Handler with direct Registry resolution, Provider adapter (OpenAI), and basic response. Auth, RateLimit, Cache, Router strategy, Token Counter, Budget, and Kafka pipeline are planned for later milestones.
+
 ## Component Interaction
 
 ```
@@ -83,6 +85,8 @@ LLM Gateway is a reverse proxy that sits between client applications and LLM pro
     └─────────┘   └──────────┘  └──────────┘  └──────────┘
 ```
 
+> **Current (M1):** Config, Server, Handler, and OpenAI Provider are implemented. Router, Auth/RateLimit/Cache middleware, Token Counter, Budget Enforcer, Metrics, and Pipeline are planned.
+
 ## Streaming Data Flow
 
 For streaming requests (`"stream": true`):
@@ -120,6 +124,8 @@ The order of middleware matters. Defined in `internal/server/server.go`:
 6. CacheCheck     — check semantic cache, short-circuit on hit
 7. [Handler]      — actual request processing
 ```
+
+> **Current (M1):** Only steps 1–3 are implemented. Steps 4–6 are planned for M3/M5.
 
 ## Ports and Endpoints
 

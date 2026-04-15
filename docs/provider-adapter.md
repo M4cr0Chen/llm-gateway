@@ -52,15 +52,17 @@ package newprovider
 import (
     "context"
     "net/http"
+    "time"
 
-    "github.com/your-org/llm-gateway/internal/model"
-    "github.com/your-org/llm-gateway/internal/provider"
+    "github.com/M4cr0Chen/llm-gateway/internal/model"
+    "github.com/M4cr0Chen/llm-gateway/internal/provider"
 )
 
 type Provider struct {
     client  *http.Client
     apiKey  string
     baseURL string
+    timeout time.Duration
     models  []string
 }
 
@@ -71,13 +73,19 @@ type Config struct {
     Models  []string
 }
 
+// New creates a new provider adapter.
+// IMPORTANT: Do NOT set Timeout on http.Client — that would kill streaming
+// connections. Instead, use context.WithTimeout in ChatCompletion for
+// non-streaming requests, leaving streaming connections unbounded.
 func New(cfg Config) *Provider {
+    if cfg.Timeout == 0 {
+        cfg.Timeout = 30 * time.Second
+    }
     return &Provider{
-        client: &http.Client{
-            Timeout: cfg.Timeout,
-        },
+        client:  &http.Client{},
         apiKey:  cfg.APIKey,
         baseURL: cfg.BaseURL,
+        timeout: cfg.Timeout,
         models:  cfg.Models,
     }
 }
@@ -146,6 +154,10 @@ func (p *Provider) translateResponse(resp providerResponse) *model.ChatCompletio
 
 ```go
 func (p *Provider) ChatCompletion(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, error) {
+    // Use context-based timeout (not http.Client.Timeout) so streaming isn't affected.
+    ctx, cancel := context.WithTimeout(ctx, p.timeout)
+    defer cancel()
+
     // 1. Translate request
     provReq, err := p.translateRequest(req)
     if err != nil {
@@ -215,12 +227,16 @@ func (p *Provider) ChatCompletionStream(ctx context.Context, req *model.ChatComp
     }
 
     // 3. Start goroutine to read stream and emit events
-    ch := make(chan provider.StreamEvent, 10) // buffered to prevent blocking
+    ch := make(chan provider.StreamEvent, 8) // buffered to prevent blocking
     go func() {
         defer close(ch)
         defer httpResp.Body.Close()
 
         scanner := bufio.NewScanner(httpResp.Body)
+        // Enlarge scanner buffer for large chunks (64KB initial, 1MB max).
+        scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+        gotDone := false
         for scanner.Scan() {
             select {
             case <-ctx.Done():
@@ -236,22 +252,42 @@ func (p *Provider) ChatCompletionStream(ctx context.Context, req *model.ChatComp
             }
             data := strings.TrimPrefix(line, "data: ")
             if data == "[DONE]" {
-                return
+                gotDone = true
+                break
             }
 
             // Parse provider chunk and translate to OpenAI chunk format
             var provChunk providerChunk
             if err := json.Unmarshal([]byte(data), &provChunk); err != nil {
-                ch <- provider.StreamEvent{Err: fmt.Errorf("parsing chunk: %w", err)}
+                select {
+                case ch <- provider.StreamEvent{Err: fmt.Errorf("decoding chunk: %w", err)}:
+                case <-ctx.Done():
+                }
                 return
             }
 
             chunk := p.translateChunk(provChunk)
-            ch <- provider.StreamEvent{Chunk: chunk}
+            select {
+            case ch <- provider.StreamEvent{Chunk: chunk}:
+            case <-ctx.Done():
+                return
+            }
         }
 
+        if gotDone {
+            return
+        }
+        // If we didn't get [DONE], report the error.
         if err := scanner.Err(); err != nil {
-            ch <- provider.StreamEvent{Err: fmt.Errorf("reading stream: %w", err)}
+            select {
+            case ch <- provider.StreamEvent{Err: fmt.Errorf("reading stream: %w", err)}:
+            case <-ctx.Done():
+            }
+        } else {
+            select {
+            case ch <- provider.StreamEvent{Err: fmt.Errorf("reading stream: unexpected EOF without [DONE]")}:
+            case <-ctx.Done():
+            }
         }
     }()
 
@@ -263,58 +299,78 @@ func (p *Provider) ChatCompletionStream(ctx context.Context, req *model.ChatComp
 
 ```go
 // handleErrorResponse translates provider error responses to gateway errors.
+// It tries to parse the provider's JSON error body first, then falls back
+// to raw text (truncated at 200 chars).
 func (p *Provider) handleErrorResponse(resp *http.Response) error {
     body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
 
-    // Map provider HTTP status to gateway error types
-    switch resp.StatusCode {
+    retryable := resp.StatusCode == http.StatusTooManyRequests ||
+        resp.StatusCode >= http.StatusInternalServerError
+
+    pe := &model.ProviderError{
+        StatusCode: resp.StatusCode,
+        Retryable:  retryable,
+    }
+
+    // Try parsing provider's error JSON. Fall back to raw text if it fails.
+    var errResp providerErrorResponse
+    if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error.Message != "" {
+        pe.Message = errResp.Error.Message
+        pe.Type = errResp.Error.Type
+    } else {
+        msg := string(body)
+        if len(msg) > 200 {
+            msg = msg[:200]
+        }
+        pe.Message = msg
+        pe.Type = errorTypeFromStatus(resp.StatusCode)
+    }
+
+    return pe
+}
+
+// errorTypeFromStatus maps HTTP status codes to OpenAI error type strings.
+func errorTypeFromStatus(status int) string {
+    switch status {
     case http.StatusUnauthorized:
-        return &model.ProviderError{
-            StatusCode: resp.StatusCode,
-            Type:       "authentication_error",
-            Message:    "Provider authentication failed",
-            Retryable:  false,
-        }
+        return "authentication_error"
     case http.StatusTooManyRequests:
-        return &model.ProviderError{
-            StatusCode: resp.StatusCode,
-            Type:       "rate_limit_error",
-            Message:    "Provider rate limit exceeded",
-            Retryable:  true, // will trigger fallback to another provider
-        }
-    case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
-        return &model.ProviderError{
-            StatusCode: resp.StatusCode,
-            Type:       "upstream_error",
-            Message:    fmt.Sprintf("Provider returned %d: %s", resp.StatusCode, string(body)),
-            Retryable:  true,
-        }
+        return "rate_limit_error"
+    case http.StatusBadRequest:
+        return "invalid_request_error"
     default:
-        return &model.ProviderError{
-            StatusCode: resp.StatusCode,
-            Type:       "upstream_error",
-            Message:    fmt.Sprintf("Provider returned %d: %s", resp.StatusCode, string(body)),
-            Retryable:  false,
-        }
+        return "upstream_error"
     }
 }
 ```
 
 ### 8. Register in provider registry
 
-In `cmd/gateway/main.go` (or wherever providers are wired up):
+In `cmd/gateway/main.go`, providers are registered from a `map[string]ProviderConfig` via a switch statement:
 
 ```go
 registry := provider.NewRegistry()
 
-if cfg.Providers.NewProvider.APIKey != "" {
-    np := newprovider.New(newprovider.Config{
-        APIKey:  cfg.Providers.NewProvider.APIKey,
-        BaseURL: cfg.Providers.NewProvider.BaseURL,
-        Timeout: cfg.Providers.NewProvider.Timeout,
-        Models:  cfg.Providers.NewProvider.Models,
-    })
-    registry.Register(np, np.Models())
+for name, provCfg := range cfg.Providers {
+    if provCfg.APIKey == "" {
+        slog.Warn("skipping provider with no API key", "provider", name)
+        continue
+    }
+    switch name {
+    case "openai":
+        p := openai.New(openai.Config{...})
+        registry.Register(p, p.Models())
+    case "newprovider":
+        p := newprovider.New(newprovider.Config{
+            APIKey:  provCfg.APIKey,
+            BaseURL: provCfg.BaseURL,
+            Timeout: provCfg.Timeout,
+            Models:  provCfg.Models,
+        })
+        registry.Register(p, p.Models())
+    default:
+        slog.Warn("unknown provider, skipping", "provider", name)
+    }
 }
 ```
 
