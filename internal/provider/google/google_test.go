@@ -429,6 +429,66 @@ func TestChatCompletion_Error500_NonJSON(t *testing.T) {
 	assert.Equal(t, "upstream_error", pe.Type)
 }
 
+func TestChatCompletion_MultiPartContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{
+			"candidates": [{
+				"content": {
+					"role": "model",
+					"parts": [{"text": "Hello "}, {"text": "world"}, {"text": "!"}]
+				},
+				"finishReason": "STOP"
+			}],
+			"usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 3, "totalTokenCount": 8}
+		}`)
+	}))
+	defer server.Close()
+
+	p := New(Config{APIKey: "test-key", BaseURL: server.URL, Models: []string{"gemini-2.0-flash"}})
+
+	resp, err := p.ChatCompletion(context.Background(), testRequest())
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	assert.Equal(t, "Hello world!", resp.Choices[0].Message.Content)
+}
+
+func TestChatCompletion_MultipleCandidates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body geminiRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		require.NotNil(t, body.GenerationConfig)
+		assert.Equal(t, 3, *body.GenerationConfig.CandidateCount)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{
+			"candidates": [
+				{"content": {"role": "model", "parts": [{"text": "Answer A"}]}, "finishReason": "STOP"},
+				{"content": {"role": "model", "parts": [{"text": "Answer B"}]}, "finishReason": "STOP"},
+				{"content": {"role": "model", "parts": [{"text": "Answer C"}]}, "finishReason": "STOP"}
+			],
+			"usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 9, "totalTokenCount": 14}
+		}`)
+	}))
+	defer server.Close()
+
+	p := New(Config{APIKey: "test-key", BaseURL: server.URL, Models: []string{"gemini-2.0-flash"}})
+
+	n := 3
+	req := testRequest()
+	req.N = &n
+
+	resp, err := p.ChatCompletion(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 3)
+	assert.Equal(t, 0, resp.Choices[0].Index)
+	assert.Equal(t, "Answer A", resp.Choices[0].Message.Content)
+	assert.Equal(t, 1, resp.Choices[1].Index)
+	assert.Equal(t, "Answer B", resp.Choices[1].Message.Content)
+	assert.Equal(t, 2, resp.Choices[2].Index)
+	assert.Equal(t, "Answer C", resp.Choices[2].Message.Content)
+}
+
 func TestChatCompletionStream_ErrorResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -171,7 +171,7 @@ func mapFinishReason(reason string) string {
 	case "RECITATION":
 		return "content_filter"
 	default:
-		return reason
+		return "stop"
 	}
 }
 
@@ -189,22 +189,19 @@ func (p *Provider) translateResponse(resp geminiResponse, reqModel string) *mode
 		Model:   reqModel,
 	}
 
-	if len(resp.Candidates) > 0 {
-		candidate := resp.Candidates[0]
+	for i, candidate := range resp.Candidates {
 		var content string
 		for _, part := range candidate.Content.Parts {
 			content += part.Text
 		}
-		result.Choices = []model.Choice{
-			{
-				Index: 0,
-				Message: model.Message{
-					Role:    "assistant",
-					Content: content,
-				},
-				FinishReason: mapFinishReason(candidate.FinishReason),
+		result.Choices = append(result.Choices, model.Choice{
+			Index: i,
+			Message: model.Message{
+				Role:    "assistant",
+				Content: content,
 			},
-		}
+			FinishReason: mapFinishReason(candidate.FinishReason),
+		})
 	}
 
 	if resp.UsageMetadata != nil {
@@ -220,6 +217,8 @@ func (p *Provider) translateResponse(resp geminiResponse, reqModel string) *mode
 
 // --- URL helpers ---
 
+// Note: Gemini requires the API key as a query parameter. Avoid logging
+// these URLs, as the key will be visible in any access logs or debug output.
 func (p *Provider) generateContentURL(modelName string) string {
 	return fmt.Sprintf("%s/models/%s:generateContent?key=%s", p.baseURL, modelName, p.apiKey)
 }
@@ -257,12 +256,12 @@ func (p *Provider) ChatCompletion(ctx context.Context, req *model.ChatCompletion
 		return nil, p.handleErrorResponse(resp)
 	}
 
-	var gr2 geminiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&gr2); err != nil {
+	var gemResp geminiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&gemResp); err != nil {
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
 
-	return p.translateResponse(gr2, req.Model), nil
+	return p.translateResponse(gemResp, req.Model), nil
 }
 
 // --- ChatCompletionStream (streaming) ---
@@ -348,15 +347,14 @@ func (p *Provider) translateChunk(resp geminiResponse, streamID, reqModel string
 		Model:   reqModel,
 	}
 
-	if len(resp.Candidates) > 0 {
-		candidate := resp.Candidates[0]
+	for i, candidate := range resp.Candidates {
 		var content string
 		for _, part := range candidate.Content.Parts {
 			content += part.Text
 		}
 
 		cc := model.ChunkChoice{
-			Index: 0,
+			Index: i,
 			Delta: model.DeltaMessage{
 				Content: content,
 			},
@@ -367,7 +365,7 @@ func (p *Provider) translateChunk(resp geminiResponse, streamID, reqModel string
 			cc.FinishReason = &fr
 		}
 
-		chunk.Choices = []model.ChunkChoice{cc}
+		chunk.Choices = append(chunk.Choices, cc)
 	}
 
 	if resp.UsageMetadata != nil {
