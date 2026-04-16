@@ -17,11 +17,12 @@ providers:
     models:
       - claude-sonnet-4-20250514
       - claude-haiku-35-20241022
-  # google:
-  #   timeout: 30s
-  #   models:
-  #     - gemini-2.0-flash
-  #     - gemini-2.0-pro
+  google:
+    base_url: "https://generativelanguage.googleapis.com/v1beta"
+    timeout: 30s
+    models:
+      - gemini-2.0-flash
+      - gemini-2.0-pro
 
 # model_aliases:
 #   "gpt4": "gpt-4o"
