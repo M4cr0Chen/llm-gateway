@@ -65,6 +65,13 @@ func main() {
 		}
 	}
 
+	for alias, target := range cfg.ModelAliases {
+		if err := registry.RegisterAlias(alias, target); err != nil {
+			log.Fatalf("failed to register model alias %q -> %q: %v", alias, target, err)
+		}
+		slog.Info("registered model alias", "alias", alias, "target", target)
+	}
+
 	srv := server.New(registry, slog.Default())
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)

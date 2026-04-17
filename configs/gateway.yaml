@@ -24,10 +24,10 @@ providers:
       - gemini-2.0-flash
       - gemini-2.0-pro
 
-# model_aliases:
-#   "gpt4": "gpt-4o"
-#   "claude": "claude-sonnet-4-20250514"
-#   "gemini": "gemini-2.0-flash"
+model_aliases:
+  "gpt4": "gpt-4o"
+  "claude": "claude-sonnet-4-20250514"
+  "gemini": "gemini-2.0-flash"
 
 log:
   level: info
