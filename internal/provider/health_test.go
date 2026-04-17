@@ -42,7 +42,8 @@ func TestRecordSuccess_ResetsFailures(t *testing.T) {
 	assert.True(t, h.IsHealthy())
 
 	s := h.Status()
-	assert.Equal(t, now, s.LastSuccess)
+	require.NotNil(t, s.LastSuccess)
+	assert.Equal(t, now, *s.LastSuccess)
 }
 
 func TestRecordFailure_MarksUnhealthy(t *testing.T) {
@@ -59,7 +60,8 @@ func TestRecordFailure_MarksUnhealthy(t *testing.T) {
 	assert.False(t, s.Healthy)
 	assert.Equal(t, 3, s.ConsecutiveFails)
 	assert.Equal(t, "boom", s.LastError)
-	assert.Equal(t, now, s.LastFailure)
+	require.NotNil(t, s.LastFailure)
+	assert.Equal(t, now, *s.LastFailure)
 }
 
 func TestCooldown_RestoresHealthy(t *testing.T) {

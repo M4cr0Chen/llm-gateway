@@ -76,7 +76,12 @@ func newTestDecorator(fp *fakeProvider, maxRetries int) *HealthTrackingProvider 
 		MaxRetries:   maxRetries,
 		RetryBackoff: time.Millisecond, // fast for tests
 	})
-	h.sleep = func(time.Duration) {} // no-op sleep
+	h.timer = func(time.Duration) <-chan time.Time { // no-wait timer for tests
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}
+	h.rand = func() float64 { return 1.0 } // max jitter for deterministic tests
 	return h
 }
 
@@ -188,12 +193,17 @@ func TestDecorator_RetryAfterHonored(t *testing.T) {
 	}
 	dec := newTestDecorator(fp, 1)
 
-	var sleptDuration time.Duration
-	dec.sleep = func(d time.Duration) { sleptDuration = d }
+	var timerDuration time.Duration
+	dec.timer = func(d time.Duration) <-chan time.Time {
+		timerDuration = d
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}
 
 	_, err := dec.ChatCompletion(context.Background(), &model.ChatCompletionRequest{})
 	require.NoError(t, err)
-	assert.Equal(t, 5*time.Second, sleptDuration)
+	assert.Equal(t, 5*time.Second, timerDuration)
 }
 
 func TestDecorator_ExponentialBackoff(t *testing.T) {
@@ -213,7 +223,13 @@ func TestDecorator_ExponentialBackoff(t *testing.T) {
 	})
 
 	var sleeps []time.Duration
-	dec.sleep = func(d time.Duration) { sleeps = append(sleeps, d) }
+	dec.timer = func(d time.Duration) <-chan time.Time {
+		sleeps = append(sleeps, d)
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}
+	dec.rand = func() float64 { return 1.0 } // max jitter for deterministic assertions
 
 	_, err := dec.ChatCompletion(context.Background(), &model.ChatCompletionRequest{})
 	require.NoError(t, err)
@@ -265,7 +281,11 @@ func TestDecorator_StreamRetryOnInitError(t *testing.T) {
 		MaxRetries:   1,
 		RetryBackoff: time.Millisecond,
 	})
-	dec.sleep = func(time.Duration) {}
+	dec.timer = func(time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}
 
 	out, err := dec.ChatCompletionStream(context.Background(), &model.ChatCompletionRequest{})
 	require.NoError(t, err)
@@ -285,7 +305,11 @@ func TestDecorator_StreamErrorRecordsFailure(t *testing.T) {
 		streamCh: ch,
 	}
 	dec := NewHealthTrackingProvider(fp, HealthConfig{FailureThreshold: 1}, RetryConfig{})
-	dec.sleep = func(time.Duration) {}
+	dec.timer = func(time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}
 
 	out, err := dec.ChatCompletionStream(context.Background(), &model.ChatCompletionRequest{})
 	require.NoError(t, err)

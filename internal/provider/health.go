@@ -13,11 +13,11 @@ type HealthConfig struct {
 
 // HealthStatus is a point-in-time snapshot of a provider's health state.
 type HealthStatus struct {
-	Healthy          bool      `json:"healthy"`
-	ConsecutiveFails int       `json:"consecutive_fails"`
-	LastSuccess      time.Time `json:"last_success,omitempty"`
-	LastFailure      time.Time `json:"last_failure,omitempty"`
-	LastError        string    `json:"last_error,omitempty"`
+	Healthy          bool       `json:"healthy"`
+	ConsecutiveFails int        `json:"consecutive_fails"`
+	LastSuccess      *time.Time `json:"last_success,omitempty"`
+	LastFailure      *time.Time `json:"last_failure,omitempty"`
+	LastError        string     `json:"last_error,omitempty"`
 }
 
 // ProviderHealth tracks the health of a single provider.
@@ -103,11 +103,16 @@ func (h *ProviderHealth) Status() HealthStatus {
 		healthy = true
 	}
 
-	return HealthStatus{
+	s := HealthStatus{
 		Healthy:          healthy,
 		ConsecutiveFails: h.consecutiveFails,
-		LastSuccess:      h.lastSuccess,
-		LastFailure:      h.lastFailure,
 		LastError:        h.lastError,
 	}
+	if !h.lastSuccess.IsZero() {
+		s.LastSuccess = &h.lastSuccess
+	}
+	if !h.lastFailure.IsZero() {
+		s.LastFailure = &h.lastFailure
+	}
+	return s
 }

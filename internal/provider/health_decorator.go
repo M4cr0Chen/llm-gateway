@@ -5,11 +5,15 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"time"
 
 	"github.com/M4cr0Chen/llm-gateway/internal/model"
 )
+
+// maxBackoff is the upper bound for exponential backoff duration.
+const maxBackoff = 30 * time.Second
 
 // RetryConfig holds per-provider retry settings.
 type RetryConfig struct {
@@ -23,7 +27,8 @@ type HealthTrackingProvider struct {
 	wrapped Provider
 	Health  *ProviderHealth
 	retry   RetryConfig
-	sleep   func(time.Duration) // for testing
+	timer   func(time.Duration) <-chan time.Time // for testing
+	rand    func() float64                       // for testing; returns [0.0, 1.0)
 }
 
 // NewHealthTrackingProvider creates a decorator that wraps the given provider
@@ -33,7 +38,10 @@ func NewHealthTrackingProvider(p Provider, healthCfg HealthConfig, retryCfg Retr
 		wrapped: p,
 		Health:  NewProviderHealth(healthCfg),
 		retry:   retryCfg,
-		sleep:   time.Sleep,
+		timer: func(d time.Duration) <-chan time.Time {
+			return time.NewTimer(d).C
+		},
+		rand: rand.Float64,
 	}
 }
 
@@ -56,7 +64,7 @@ func (h *HealthTrackingProvider) ChatCompletion(ctx context.Context, req *model.
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-h.sleepChan(backoff):
+			case <-h.timer(backoff):
 			}
 		}
 
@@ -98,7 +106,7 @@ func (h *HealthTrackingProvider) ChatCompletionStream(ctx context.Context, req *
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-h.sleepChan(backoff):
+			case <-h.timer(backoff):
 			}
 		}
 
@@ -153,7 +161,8 @@ func (h *HealthTrackingProvider) trackStreamHealth(ctx context.Context, in <-cha
 }
 
 // backoffDuration calculates the backoff for the given attempt, respecting
-// Retry-After headers from 429 responses.
+// Retry-After headers from 429 responses. For computed backoffs it applies
+// random jitter in [0.5, 1.0) of the base duration to avoid thundering herd.
 func (h *HealthTrackingProvider) backoffDuration(attempt int, err error) time.Duration {
 	if pe, ok := asProviderError(err); ok && pe.StatusCode == http.StatusTooManyRequests {
 		if ra := pe.RetryAfter; ra > 0 {
@@ -165,23 +174,15 @@ func (h *HealthTrackingProvider) backoffDuration(attempt int, err error) time.Du
 	if base <= 0 {
 		base = time.Second
 	}
-	// Exponential backoff: base * 2^(attempt-1), capped at 30s.
+	// Exponential backoff: base * 2^(attempt-1), capped at maxBackoff.
 	multiplier := math.Pow(2, float64(attempt-1))
 	d := time.Duration(float64(base) * multiplier)
-	if d > 30*time.Second {
-		d = 30 * time.Second
+	if d > maxBackoff {
+		d = maxBackoff
 	}
-	return d
-}
-
-// sleepChan returns a channel that fires after the given duration.
-func (h *HealthTrackingProvider) sleepChan(d time.Duration) <-chan time.Time {
-	ch := make(chan time.Time, 1)
-	go func() {
-		h.sleep(d)
-		ch <- time.Now()
-	}()
-	return ch
+	// Apply jitter: uniform random in [0.5*d, d).
+	jitter := 0.5 + h.rand()*0.5
+	return time.Duration(float64(d) * jitter)
 }
 
 // isRetryable returns true if the error represents a retryable condition
