@@ -244,9 +244,9 @@ func TestDecorator_StreamSuccess(t *testing.T) {
 	}
 	require.Len(t, events, 1)
 	assert.Equal(t, "c1", events[0].Chunk.ID)
-	// Wait briefly for the goroutine to record health.
-	time.Sleep(10 * time.Millisecond)
-	assert.True(t, dec.Health.IsHealthy())
+	require.Eventually(t, func() bool {
+		return dec.Health.IsHealthy()
+	}, time.Second, time.Millisecond)
 }
 
 func TestDecorator_StreamRetryOnInitError(t *testing.T) {
@@ -291,9 +291,9 @@ func TestDecorator_StreamErrorRecordsFailure(t *testing.T) {
 	require.NoError(t, err)
 	for range out {
 	}
-	// Wait for goroutine.
-	time.Sleep(10 * time.Millisecond)
-	assert.False(t, dec.Health.IsHealthy())
+	require.Eventually(t, func() bool {
+		return !dec.Health.IsHealthy()
+	}, time.Second, time.Millisecond)
 }
 
 func TestDecorator_NameAndModels(t *testing.T) {

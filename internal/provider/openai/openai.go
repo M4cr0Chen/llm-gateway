@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -209,7 +208,7 @@ func (p *Provider) handleErrorResponse(resp *http.Response) error {
 	pe := &model.ProviderError{
 		StatusCode: resp.StatusCode,
 		Retryable:  retryable,
-		RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+		RetryAfter: model.ParseRetryAfter(resp.Header.Get("Retry-After")),
 	}
 
 	var errResp openaiErrorResponse
@@ -226,17 +225,6 @@ func (p *Provider) handleErrorResponse(resp *http.Response) error {
 	}
 
 	return pe
-}
-
-func parseRetryAfter(header string) time.Duration {
-	if header == "" {
-		return 0
-	}
-	secs, err := strconv.Atoi(header)
-	if err != nil {
-		return 0
-	}
-	return time.Duration(secs) * time.Second
 }
 
 func errorTypeFromStatus(status int) string {

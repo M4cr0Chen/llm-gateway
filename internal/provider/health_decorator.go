@@ -138,6 +138,8 @@ func (h *HealthTrackingProvider) trackStreamHealth(ctx context.Context, in <-cha
 			select {
 			case out <- evt:
 			case <-ctx.Done():
+				// Context cancellation (e.g. client disconnect) is not a
+				// provider fault, so we intentionally skip recording health.
 				return
 			}
 		}
@@ -163,9 +165,13 @@ func (h *HealthTrackingProvider) backoffDuration(attempt int, err error) time.Du
 	if base <= 0 {
 		base = time.Second
 	}
-	// Exponential backoff: base * 2^(attempt-1)
+	// Exponential backoff: base * 2^(attempt-1), capped at 30s.
 	multiplier := math.Pow(2, float64(attempt-1))
-	return time.Duration(float64(base) * multiplier)
+	d := time.Duration(float64(base) * multiplier)
+	if d > 30*time.Second {
+		d = 30 * time.Second
+	}
+	return d
 }
 
 // sleepChan returns a channel that fires after the given duration.
