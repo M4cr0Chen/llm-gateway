@@ -49,7 +49,7 @@ func newTestServer() *server.Server {
 	mock := &mockProvider{name: "test", models: []string{"test-model"}}
 	reg.Register(mock, mock.Models())
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	return server.New(reg, logger)
+	return server.New(reg, nil, logger)
 }
 
 func TestHealth(t *testing.T) {

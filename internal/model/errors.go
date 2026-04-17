@@ -1,6 +1,9 @@
 package model
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // APIError is the top-level error response returned to clients (OpenAI-compatible format).
 type APIError struct {
@@ -21,6 +24,7 @@ type ProviderError struct {
 	Type       string
 	Message    string
 	Retryable  bool
+	RetryAfter time.Duration
 }
 
 func (e *ProviderError) Error() string {

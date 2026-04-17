@@ -18,7 +18,7 @@ type Server struct {
 }
 
 // New creates a Server with middleware and routes wired up.
-func New(registry *provider.Registry, logger *slog.Logger) *Server {
+func New(registry *provider.Registry, healthProviders map[string]*provider.HealthTrackingProvider, logger *slog.Logger) *Server {
 	r := chi.NewRouter()
 
 	// Middleware chain
@@ -29,11 +29,13 @@ func New(registry *provider.Registry, logger *slog.Logger) *Server {
 	// Handlers
 	chatHandler := handler.NewChatHandler(registry)
 	modelsHandler := handler.NewModelsHandler(registry)
+	internalHealthHandler := handler.NewInternalHealthHandler(healthProviders)
 
 	// Routes
 	r.Post("/v1/chat/completions", chatHandler.HandleChatCompletion)
 	r.Get("/v1/models", modelsHandler.HandleListModels)
 	r.Get("/health", handler.HandleHealth)
+	r.Get("/internal/health", internalHealthHandler.HandleInternalHealth)
 
 	return &Server{Handler: r}
 }

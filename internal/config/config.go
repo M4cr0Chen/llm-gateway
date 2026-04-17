@@ -7,6 +7,7 @@ type Config struct {
 	Server       ServerConfig              `koanf:"server"`
 	Providers    map[string]ProviderConfig `koanf:"providers"`
 	ModelAliases map[string]string         `koanf:"model_aliases"`
+	Health       HealthConfig              `koanf:"health"`
 	Log          LogConfig                 `koanf:"log"`
 }
 
@@ -19,10 +20,18 @@ type ServerConfig struct {
 
 // ProviderConfig holds settings for a single LLM provider.
 type ProviderConfig struct {
-	APIKey  string        `koanf:"api_key"`
-	BaseURL string        `koanf:"base_url"`
-	Timeout time.Duration `koanf:"timeout"`
-	Models  []string      `koanf:"models"`
+	APIKey       string        `koanf:"api_key"`
+	BaseURL      string        `koanf:"base_url"`
+	Timeout      time.Duration `koanf:"timeout"`
+	Models       []string      `koanf:"models"`
+	MaxRetries   int           `koanf:"max_retries"`
+	RetryBackoff time.Duration `koanf:"retry_backoff"`
+}
+
+// HealthConfig holds settings for provider health tracking.
+type HealthConfig struct {
+	FailureThreshold int           `koanf:"failure_threshold"`
+	CooldownPeriod   time.Duration `koanf:"cooldown_period"`
 }
 
 // LogConfig holds logging settings.
