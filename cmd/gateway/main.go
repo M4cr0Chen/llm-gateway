@@ -30,40 +30,56 @@ func main() {
 
 	setupLogger(cfg.Log)
 
+	healthCfg := provider.HealthConfig{
+		FailureThreshold: cfg.Health.FailureThreshold,
+		CooldownPeriod:   cfg.Health.CooldownPeriod,
+	}
+
 	registry := provider.NewRegistry()
+	healthProviders := make(map[string]*provider.HealthTrackingProvider)
+
 	for name, provCfg := range cfg.Providers {
 		if provCfg.APIKey == "" {
 			slog.Warn("skipping provider with no API key", "provider", name)
 			continue
 		}
+
+		retryCfg := provider.RetryConfig{
+			MaxRetries:   provCfg.MaxRetries,
+			RetryBackoff: provCfg.RetryBackoff,
+		}
+
+		var base provider.Provider
 		switch name {
 		case "openai":
-			p := openai.New(openai.Config{
+			base = openai.New(openai.Config{
 				APIKey:  provCfg.APIKey,
 				BaseURL: provCfg.BaseURL,
 				Timeout: provCfg.Timeout,
 				Models:  provCfg.Models,
 			})
-			registry.Register(p, p.Models())
 		case "anthropic":
-			p := anthropic.New(anthropic.Config{
+			base = anthropic.New(anthropic.Config{
 				APIKey:  provCfg.APIKey,
 				BaseURL: provCfg.BaseURL,
 				Timeout: provCfg.Timeout,
 				Models:  provCfg.Models,
 			})
-			registry.Register(p, p.Models())
 		case "google":
-			p := google.New(google.Config{
+			base = google.New(google.Config{
 				APIKey:  provCfg.APIKey,
 				BaseURL: provCfg.BaseURL,
 				Timeout: provCfg.Timeout,
 				Models:  provCfg.Models,
 			})
-			registry.Register(p, p.Models())
 		default:
 			slog.Warn("unknown provider, skipping", "provider", name)
+			continue
 		}
+
+		wrapped := provider.NewHealthTrackingProvider(base, healthCfg, retryCfg)
+		healthProviders[name] = wrapped
+		registry.Register(wrapped, wrapped.Models())
 	}
 
 	aliasKeys := make([]string, 0, len(cfg.ModelAliases))
@@ -80,7 +96,7 @@ func main() {
 		slog.Info("registered model alias", "alias", alias, "target", target)
 	}
 
-	srv := server.New(registry, slog.Default())
+	srv := server.New(registry, healthProviders, slog.Default())
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	httpServer := &http.Server{

@@ -397,6 +397,7 @@ func (p *Provider) handleErrorResponse(resp *http.Response) error {
 	pe := &model.ProviderError{
 		StatusCode: resp.StatusCode,
 		Retryable:  retryable,
+		RetryAfter: model.ParseRetryAfter(resp.Header.Get("Retry-After")),
 	}
 
 	var errResp geminiErrorResponse
