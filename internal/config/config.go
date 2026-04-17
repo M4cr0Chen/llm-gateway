@@ -4,9 +4,10 @@ import "time"
 
 // Config is the top-level gateway configuration.
 type Config struct {
-	Server    ServerConfig              `koanf:"server"`
-	Providers map[string]ProviderConfig `koanf:"providers"`
-	Log       LogConfig                 `koanf:"log"`
+	Server       ServerConfig              `koanf:"server"`
+	Providers    map[string]ProviderConfig `koanf:"providers"`
+	ModelAliases map[string]string         `koanf:"model_aliases"`
+	Log          LogConfig                 `koanf:"log"`
 }
 
 // ServerConfig holds HTTP server settings.
