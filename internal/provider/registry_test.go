@@ -117,6 +117,16 @@ func TestRegistry_RegisterAlias(t *testing.T) {
 	}
 }
 
+func TestRegistry_AliasConflictsWithCanonicalModel(t *testing.T) {
+	r := provider.NewRegistry()
+	r.Register(&mockProvider{name: "openai"}, []string{"gpt-4o"})
+	r.Register(&mockProvider{name: "anthropic"}, []string{"claude-sonnet-4-20250514"})
+
+	err := r.RegisterAlias("gpt-4o", "claude-sonnet-4-20250514")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicts")
+}
+
 func TestRegistry_AliasAppearsInListModels(t *testing.T) {
 	r := provider.NewRegistry()
 	r.Register(&mockProvider{name: "openai"}, []string{"gpt-4o"})

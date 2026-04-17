@@ -32,11 +32,15 @@ func (r *Registry) Register(p Provider, models []string) {
 }
 
 // RegisterAlias maps an alias to the same provider as an existing target model.
-// Returns an error if the target model is not registered.
+// Returns an error if the target model is not registered or if the alias
+// conflicts with an already-registered canonical model name.
 func (r *Registry) RegisterAlias(alias, target string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if _, exists := r.models[alias]; exists {
+		return fmt.Errorf("alias %q conflicts with already-registered model", alias)
+	}
 	p, ok := r.models[target]
 	if !ok {
 		return fmt.Errorf("alias %q targets unregistered model %q", alias, target)

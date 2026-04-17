@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 
 	"github.com/M4cr0Chen/llm-gateway/internal/config"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider"
@@ -65,7 +66,14 @@ func main() {
 		}
 	}
 
-	for alias, target := range cfg.ModelAliases {
+	aliasKeys := make([]string, 0, len(cfg.ModelAliases))
+	for alias := range cfg.ModelAliases {
+		aliasKeys = append(aliasKeys, alias)
+	}
+	sort.Strings(aliasKeys)
+
+	for _, alias := range aliasKeys {
+		target := cfg.ModelAliases[alias]
 		if err := registry.RegisterAlias(alias, target); err != nil {
 			log.Fatalf("failed to register model alias %q -> %q: %v", alias, target, err)
 		}
