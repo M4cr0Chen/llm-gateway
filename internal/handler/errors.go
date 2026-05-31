@@ -1,24 +1,17 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
+	"github.com/M4cr0Chen/llm-gateway/internal/apierr"
 	"github.com/M4cr0Chen/llm-gateway/internal/model"
 )
 
-// writeError writes an OpenAI-compatible error response.
-func writeError(w http.ResponseWriter, status int, errType, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(model.APIError{
-		Error: model.ErrorDetail{
-			Message: message,
-			Type:    errType,
-			Code:    code,
-		},
-	})
+// WriteError is a thin alias for apierr.Write, kept for the existing
+// in-package call sites.
+func WriteError(w http.ResponseWriter, status int, errType, code, message string) {
+	apierr.Write(w, status, errType, code, message)
 }
 
 // handleProviderError maps a provider error to an HTTP response.
@@ -32,9 +25,9 @@ func handleProviderError(w http.ResponseWriter, err error) {
 		if status >= 500 {
 			status = http.StatusBadGateway
 		}
-		writeError(w, status, pe.Type, "provider_error", pe.Message)
+		apierr.Write(w, status, pe.Type, "provider_error", pe.Message)
 		return
 	}
 
-	writeError(w, http.StatusBadGateway, "upstream_error", "provider_error", "upstream provider error")
+	apierr.Write(w, http.StatusBadGateway, "upstream_error", "provider_error", "upstream provider error")
 }

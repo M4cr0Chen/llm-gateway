@@ -9,6 +9,8 @@ type Config struct {
 	ModelAliases map[string]string         `koanf:"model_aliases"`
 	Health       HealthConfig              `koanf:"health"`
 	Log          LogConfig                 `koanf:"log"`
+	Database     DatabaseConfig            `koanf:"database"`
+	Auth         AuthConfig                `koanf:"auth"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -39,4 +41,27 @@ type LogConfig struct {
 	Level       string `koanf:"level"`
 	Format      string `koanf:"format"`
 	DebugBodies bool   `koanf:"debug_bodies"`
+}
+
+// DatabaseConfig holds backing-store connection settings.
+type DatabaseConfig struct {
+	Postgres PostgresConfig `koanf:"postgres"`
+}
+
+// PostgresConfig holds settings for the Postgres connection pool. The DSN
+// is a secret and must be supplied via GATEWAY_DATABASE__POSTGRES__DSN;
+// AutoMigrate is an opt-in startup behaviour for development.
+type PostgresConfig struct {
+	DSN            string `koanf:"dsn"`
+	AutoMigrate    bool   `koanf:"auto_migrate"`
+	MaxConnections int    `koanf:"max_connections"`
+}
+
+// AuthConfig holds API key authentication settings. AdminToken is a secret
+// and must be supplied via GATEWAY_AUTH__ADMIN_TOKEN.
+type AuthConfig struct {
+	Enabled    bool          `koanf:"enabled"`
+	AdminToken string        `koanf:"admin_token"`
+	CacheTTL   time.Duration `koanf:"cache_ttl"`
+	CacheSize  int           `koanf:"cache_size"`
 }
