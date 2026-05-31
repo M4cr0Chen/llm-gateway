@@ -346,33 +346,53 @@ func errorTypeFromStatus(status int) string {
 
 ### 8. Register in provider registry
 
-In `cmd/gateway/main.go`, providers are registered from a `map[string]ProviderConfig` via a switch statement:
+In `cmd/gateway/main.go`, every provider is wrapped with
+`provider.NewHealthTrackingProvider` before being registered. The decorator
+adds retry-with-exponential-backoff (with jitter) and per-provider health
+tracking exposed via `GET /internal/health`. The base adapter only needs to
+implement the `Provider` interface; it does not need its own retry loop or
+health bookkeeping.
 
 ```go
 registry := provider.NewRegistry()
+healthProviders := make(map[string]*provider.HealthTrackingProvider)
 
 for name, provCfg := range cfg.Providers {
     if provCfg.APIKey == "" {
         slog.Warn("skipping provider with no API key", "provider", name)
         continue
     }
+
+    retryCfg := provider.RetryConfig{
+        MaxRetries:   provCfg.MaxRetries,
+        RetryBackoff: provCfg.RetryBackoff,
+    }
+
+    var base provider.Provider
     switch name {
     case "openai":
-        p := openai.New(openai.Config{...})
-        registry.Register(p, p.Models())
+        base = openai.New(openai.Config{...})
     case "newprovider":
-        p := newprovider.New(newprovider.Config{
+        base = newprovider.New(newprovider.Config{
             APIKey:  provCfg.APIKey,
             BaseURL: provCfg.BaseURL,
             Timeout: provCfg.Timeout,
             Models:  provCfg.Models,
         })
-        registry.Register(p, p.Models())
     default:
         slog.Warn("unknown provider, skipping", "provider", name)
+        continue
     }
+
+    wrapped := provider.NewHealthTrackingProvider(base, healthCfg, retryCfg)
+    healthProviders[name] = wrapped
+    registry.Register(wrapped, wrapped.Models())
 }
 ```
+
+The retry decorator only retries `ProviderError` instances flagged as
+`Retryable` (typically HTTP 429 and 5xx). Adapters MUST set this flag in
+`handleErrorResponse` so the decorator can act on it.
 
 ## Testing Pattern
 

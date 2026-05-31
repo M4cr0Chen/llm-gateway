@@ -9,7 +9,7 @@ The gateway exposes an **OpenAI-compatible API**. Any client that works with the
 | `POST /v1/chat/completions` | Implemented | M1 |
 | `GET /v1/models` | Implemented | M1 |
 | `GET /health` | Implemented | M1 |
-| `GET /internal/health` | Planned | M2 |
+| `GET /internal/health` | Implemented | M2 |
 | `POST /internal/admin/keys` | Planned | M3 |
 | `DELETE /internal/admin/keys/{id}` | Planned | M3 |
 | `GET /internal/admin/usage` | Planned | M6 |
@@ -187,15 +187,32 @@ These are prefixed with `/internal/admin/`.
 
 ### GET /internal/health
 
-Detailed health check showing provider status.
+Detailed health check showing per-provider status. Aggregate `status` is
+`"ok"` if all providers are healthy, `"down"` if none are healthy, otherwise
+`"degraded"`. Per-provider fields come from `provider.HealthStatus`
+(`internal/provider/health.go`). `last_success`, `last_failure`, and
+`last_error` are omitted when empty.
 
 ```json
 {
-  "status": "ok",
+  "status": "degraded",
   "providers": {
-    "openai": {"healthy": true, "latency_p50_ms": 450},
-    "anthropic": {"healthy": true, "latency_p50_ms": 520},
-    "google": {"healthy": false, "last_error": "timeout", "last_failure": "2025-01-15T10:30:00Z"}
+    "openai": {
+      "healthy": true,
+      "consecutive_fails": 0,
+      "last_success": "2026-05-30T10:30:00Z"
+    },
+    "anthropic": {
+      "healthy": true,
+      "consecutive_fails": 0,
+      "last_success": "2026-05-30T10:29:58Z"
+    },
+    "google": {
+      "healthy": false,
+      "consecutive_fails": 5,
+      "last_failure": "2026-05-30T10:29:55Z",
+      "last_error": "upstream error: 503 service unavailable"
+    }
   }
 }
 ```
