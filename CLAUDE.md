@@ -194,6 +194,7 @@ Before working on a specific area, read the corresponding design document:
 Side Notes on Development:
 
 - Don't add signature in commit messages/pr. The messages should only focus on the work, not authorship.
+- When starting work on a new issue, always create a dedicated branch first (e.g., `feature/<issue-number>-short-description` or `fix/<issue-number>-short-description`) and do all work on that branch. Never commit issue work directly to `main`.
 
 ## Current Status
 
