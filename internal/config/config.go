@@ -11,6 +11,7 @@ type Config struct {
 	Log          LogConfig                 `koanf:"log"`
 	Database     DatabaseConfig            `koanf:"database"`
 	Auth         AuthConfig                `koanf:"auth"`
+	RateLimit    RateLimitConfig           `koanf:"rate_limit"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -46,6 +47,14 @@ type LogConfig struct {
 // DatabaseConfig holds backing-store connection settings.
 type DatabaseConfig struct {
 	Postgres PostgresConfig `koanf:"postgres"`
+	Redis    RedisConfig    `koanf:"redis"`
+}
+
+// RedisConfig holds settings for the Redis client used by the rate
+// limiter. DSN is a secret and must be supplied via
+// GATEWAY_DATABASE__REDIS__DSN; it accepts both redis:// and rediss://.
+type RedisConfig struct {
+	DSN string `koanf:"dsn"`
 }
 
 // PostgresConfig holds settings for the Postgres connection pool. The DSN
@@ -64,4 +73,13 @@ type AuthConfig struct {
 	AdminToken string        `koanf:"admin_token"`
 	CacheTTL   time.Duration `koanf:"cache_ttl"`
 	CacheSize  int           `koanf:"cache_size"`
+}
+
+// RateLimitConfig holds the per-API-key request and token throttling
+// settings. DefaultRPM and DefaultTPM apply when a KeyInfo has 0 in the
+// corresponding field; non-zero KeyInfo values override them.
+type RateLimitConfig struct {
+	Enabled    bool `koanf:"enabled"`
+	DefaultRPM int  `koanf:"default_rpm"`
+	DefaultTPM int  `koanf:"default_tpm"`
 }

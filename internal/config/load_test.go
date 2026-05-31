@@ -189,6 +189,61 @@ auth:
 	assert.Contains(t, err.Error(), "GATEWAY_AUTH__ADMIN_TOKEN")
 }
 
+func TestLoad_RateLimitDefaults(t *testing.T) {
+	yamlContent := `
+providers:
+  openai:
+    base_url: "https://api.openai.com/v1"
+`
+	path := writeTemp(t, yamlContent)
+	t.Setenv("GATEWAY_PROVIDERS__OPENAI__API_KEY", "sk-test")
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, 60, cfg.RateLimit.DefaultRPM)
+	assert.Equal(t, 100000, cfg.RateLimit.DefaultTPM)
+}
+
+func TestLoad_RateLimitEnabledWithoutRedisDSN_Error(t *testing.T) {
+	yamlContent := `
+providers:
+  openai:
+    base_url: "https://api.openai.com/v1"
+rate_limit:
+  enabled: true
+`
+	path := writeTemp(t, yamlContent)
+	t.Setenv("GATEWAY_PROVIDERS__OPENAI__API_KEY", "sk-test")
+
+	_, err := Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GATEWAY_DATABASE__REDIS__DSN")
+}
+
+func TestLoad_RateLimitFromEnv(t *testing.T) {
+	yamlContent := `
+providers:
+  openai:
+    base_url: "https://api.openai.com/v1"
+rate_limit:
+  enabled: true
+  default_rpm: 120
+  default_tpm: 50000
+`
+	path := writeTemp(t, yamlContent)
+	t.Setenv("GATEWAY_PROVIDERS__OPENAI__API_KEY", "sk-test")
+	t.Setenv("GATEWAY_DATABASE__REDIS__DSN", "redis://localhost:6379/0")
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.RateLimit.Enabled)
+	assert.Equal(t, 120, cfg.RateLimit.DefaultRPM)
+	assert.Equal(t, 50000, cfg.RateLimit.DefaultTPM)
+	assert.Equal(t, "redis://localhost:6379/0", cfg.Database.Redis.DSN)
+}
+
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()

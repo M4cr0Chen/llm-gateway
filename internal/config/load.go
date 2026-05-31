@@ -81,6 +81,12 @@ func applyDefaults(cfg *Config) {
 	if cfg.Auth.CacheSize == 0 {
 		cfg.Auth.CacheSize = 10000
 	}
+	if cfg.RateLimit.DefaultRPM == 0 {
+		cfg.RateLimit.DefaultRPM = 60
+	}
+	if cfg.RateLimit.DefaultTPM == 0 {
+		cfg.RateLimit.DefaultTPM = 100000
+	}
 	for name, p := range cfg.Providers {
 		if p.Timeout == 0 {
 			p.Timeout = 30 * time.Second
@@ -107,6 +113,9 @@ func validate(cfg *Config) error {
 		if cfg.Auth.AdminToken == "" {
 			return fmt.Errorf("auth is enabled but auth.admin_token is empty (set GATEWAY_AUTH__ADMIN_TOKEN)")
 		}
+	}
+	if cfg.RateLimit.Enabled && cfg.Database.Redis.DSN == "" {
+		return fmt.Errorf("rate_limit is enabled but database.redis.dsn is empty (set GATEWAY_DATABASE__REDIS__DSN)")
 	}
 	return nil
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/M4cr0Chen/llm-gateway/internal/handler"
 	"github.com/M4cr0Chen/llm-gateway/internal/middleware"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider"
+	"github.com/M4cr0Chen/llm-gateway/internal/ratelimit"
 )
 
 // Server holds the HTTP handler and its dependencies.
@@ -23,9 +24,10 @@ type Server struct {
 // (handy in tests and in dev mode with auth disabled).
 type Options struct {
 	HealthProviders map[string]*provider.HealthTrackingProvider
-	Authenticator   auth.Authenticator       // nil → /v1/* mounted without auth
-	AdminToken      string                   // empty → admin routes are NOT mounted
+	Authenticator   auth.Authenticator        // nil → /v1/* mounted without auth
+	AdminToken      string                    // empty → admin routes are NOT mounted
 	AdminKeys       *handler.AdminKeysHandler // nil → admin routes are NOT mounted
+	RateLimiter     ratelimit.Reserver        // nil → no rate-limit middleware on /v1/*
 }
 
 // New constructs the HTTP server. Public routes (/health, /v1/*) are
@@ -51,6 +53,9 @@ func New(registry *provider.Registry, opts Options, logger *slog.Logger) *Server
 	r.Group(func(api chi.Router) {
 		if opts.Authenticator != nil {
 			api.Use(middleware.RequireAPIKey(opts.Authenticator))
+		}
+		if opts.RateLimiter != nil {
+			api.Use(middleware.RateLimit(opts.RateLimiter))
 		}
 		api.Post("/v1/chat/completions", chatHandler.HandleChatCompletion)
 		api.Get("/v1/models", modelsHandler.HandleListModels)

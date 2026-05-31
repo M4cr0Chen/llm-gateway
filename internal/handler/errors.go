@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/M4cr0Chen/llm-gateway/internal/apierr"
 	"github.com/M4cr0Chen/llm-gateway/internal/model"
@@ -12,6 +13,15 @@ import (
 // in-package call sites.
 func WriteError(w http.ResponseWriter, status int, errType, code, message string) {
 	apierr.Write(w, status, errType, code, message)
+}
+
+// WriteRateLimitError is a thin alias for apierr.WriteRateLimit, kept so
+// in-package call sites can share the same idiom as WriteError. The
+// rate-limit middleware itself calls apierr directly to stay outside
+// this package and avoid the handler ↔ middleware import cycle (admin
+// handlers depend on middleware for context helpers).
+func WriteRateLimitError(w http.ResponseWriter, retryAfter time.Duration, message string) {
+	apierr.WriteRateLimit(w, retryAfter, message)
 }
 
 // handleProviderError maps a provider error to an HTTP response.
