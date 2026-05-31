@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"log/slog"
@@ -8,12 +9,15 @@ import (
 	"os"
 	"sort"
 
+	"github.com/M4cr0Chen/llm-gateway/internal/auth"
 	"github.com/M4cr0Chen/llm-gateway/internal/config"
+	"github.com/M4cr0Chen/llm-gateway/internal/handler"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider/anthropic"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider/google"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider/openai"
 	"github.com/M4cr0Chen/llm-gateway/internal/server"
+	"github.com/M4cr0Chen/llm-gateway/internal/store"
 )
 
 func main() {
@@ -30,6 +34,35 @@ func main() {
 
 	setupLogger(cfg.Log)
 
+	registry, healthProviders := buildProviders(cfg)
+
+	authenticator, adminKeys, closer := buildAuth(cfg)
+	if closer != nil {
+		defer closer()
+	}
+
+	srv := server.New(registry, server.Options{
+		HealthProviders: healthProviders,
+		Authenticator:   authenticator,
+		AdminToken:      cfg.Auth.AdminToken,
+		AdminKeys:       adminKeys,
+	}, slog.Default())
+
+	addr := fmt.Sprintf(":%d", cfg.Server.Port)
+	httpServer := &http.Server{
+		Addr:         addr,
+		Handler:      srv.Handler,
+		ReadTimeout:  cfg.Server.ReadTimeout,
+		WriteTimeout: cfg.Server.WriteTimeout,
+	}
+
+	slog.Info("starting llm-gateway", "addr", addr)
+	if err := httpServer.ListenAndServe(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func buildProviders(cfg *config.Config) (*provider.Registry, map[string]*provider.HealthTrackingProvider) {
 	healthCfg := provider.HealthConfig{
 		FailureThreshold: cfg.Health.FailureThreshold,
 		CooldownPeriod:   cfg.Health.CooldownPeriod,
@@ -96,20 +129,36 @@ func main() {
 		slog.Info("registered model alias", "alias", alias, "target", target)
 	}
 
-	srv := server.New(registry, healthProviders, slog.Default())
+	return registry, healthProviders
+}
 
-	addr := fmt.Sprintf(":%d", cfg.Server.Port)
-	httpServer := &http.Server{
-		Addr:         addr,
-		Handler:      srv.Handler,
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: cfg.Server.WriteTimeout,
+// buildAuth constructs the authenticator and admin handler based on
+// cfg.Auth.Enabled. When disabled, returns an AllowAll dev escape hatch
+// and a nil admin handler (so admin routes are not mounted). Returns a
+// closer that releases the database pool (nil when auth is disabled).
+func buildAuth(cfg *config.Config) (auth.Authenticator, *handler.AdminKeysHandler, func()) {
+	if !cfg.Auth.Enabled {
+		return auth.NewAllowAll(), nil, nil
 	}
 
-	slog.Info("starting llm-gateway", "addr", addr)
-	if err := httpServer.ListenAndServe(); err != nil {
-		log.Fatal(err)
+	ctx := context.Background()
+	pool, err := store.NewPool(ctx, cfg.Database.Postgres.DSN, cfg.Database.Postgres.MaxConnections)
+	if err != nil {
+		log.Fatalf("failed to connect to postgres: %v", err)
 	}
+
+	if cfg.Database.Postgres.AutoMigrate {
+		if err := store.RunMigrations(cfg.Database.Postgres.DSN); err != nil {
+			pool.Close()
+			log.Fatalf("failed to apply migrations: %v", err)
+		}
+		slog.Info("database migrations applied")
+	}
+
+	keysStore := store.NewAPIKeyStore(pool)
+	cached := auth.NewCached(keysStore, cfg.Auth.CacheTTL, cfg.Auth.CacheSize)
+	adminHandler := handler.NewAdminKeysHandler(keysStore, cached.Invalidate)
+	return cached, adminHandler, pool.Close
 }
 
 func setupLogger(cfg config.LogConfig) {

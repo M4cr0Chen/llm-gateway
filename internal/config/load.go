@@ -72,6 +72,15 @@ func applyDefaults(cfg *Config) {
 	if cfg.Log.Format == "" {
 		cfg.Log.Format = "json"
 	}
+	if cfg.Database.Postgres.MaxConnections == 0 {
+		cfg.Database.Postgres.MaxConnections = 20
+	}
+	if cfg.Auth.CacheTTL == 0 {
+		cfg.Auth.CacheTTL = 5 * time.Minute
+	}
+	if cfg.Auth.CacheSize == 0 {
+		cfg.Auth.CacheSize = 10000
+	}
 	for name, p := range cfg.Providers {
 		if p.Timeout == 0 {
 			p.Timeout = 30 * time.Second
@@ -90,6 +99,14 @@ func validate(cfg *Config) error {
 	}
 	if !hasProvider {
 		return fmt.Errorf("at least one provider must be configured with an API key")
+	}
+	if cfg.Auth.Enabled {
+		if cfg.Database.Postgres.DSN == "" {
+			return fmt.Errorf("auth is enabled but database.postgres.dsn is empty (set GATEWAY_DATABASE__POSTGRES__DSN)")
+		}
+		if cfg.Auth.AdminToken == "" {
+			return fmt.Errorf("auth is enabled but auth.admin_token is empty (set GATEWAY_AUTH__ADMIN_TOKEN)")
+		}
 	}
 	return nil
 }

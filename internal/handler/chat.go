@@ -31,29 +31,29 @@ func (h *ChatHandler) HandleChatCompletion(w http.ResponseWriter, r *http.Reques
 	var req model.ChatCompletionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		if isMaxBytesError(err) {
-			writeError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "request_too_large",
+			WriteError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "request_too_large",
 				"request body exceeds 10MB limit")
 			return
 		}
-		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request",
+		WriteError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request",
 			fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
 
 	if req.Model == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request",
+		WriteError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request",
 			"model is required")
 		return
 	}
 	if len(req.Messages) == 0 {
-		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request",
+		WriteError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request",
 			"messages must not be empty")
 		return
 	}
 
 	p, err := h.registry.Resolve(req.Model)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_model", err.Error())
+		WriteError(w, http.StatusBadRequest, "invalid_request_error", "invalid_model", err.Error())
 		return
 	}
 
@@ -87,7 +87,7 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, p pro
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "internal_error", "internal_error",
+		WriteError(w, http.StatusInternalServerError, "internal_error", "internal_error",
 			"streaming not supported")
 		// Drain the channel to avoid goroutine leak.
 		for range ch {

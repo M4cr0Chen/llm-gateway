@@ -43,3 +43,15 @@ log:
   level: info
   format: json
   debug_bodies: false
+
+database:
+  postgres:
+    dsn: ""               # GATEWAY_DATABASE__POSTGRES__DSN (env-only)
+    auto_migrate: false   # GATEWAY_DATABASE__POSTGRES__AUTO_MIGRATE
+    max_connections: 20
+
+auth:
+  enabled: true
+  admin_token: ""         # GATEWAY_AUTH__ADMIN_TOKEN (env-only)
+  cache_ttl: 5m
+  cache_size: 10000

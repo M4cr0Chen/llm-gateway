@@ -128,6 +128,67 @@ providers:
 	assert.Equal(t, 30*time.Second, cfg.Providers["openai"].Timeout)
 }
 
+func TestLoad_DatabaseAndAuthFromEnv(t *testing.T) {
+	yamlContent := `
+providers:
+  openai:
+    base_url: "https://api.openai.com/v1"
+auth:
+  enabled: true
+`
+	path := writeTemp(t, yamlContent)
+
+	t.Setenv("GATEWAY_PROVIDERS__OPENAI__API_KEY", "sk-test")
+	t.Setenv("GATEWAY_DATABASE__POSTGRES__DSN", "postgres://localhost:5432/llm_gateway?sslmode=disable")
+	t.Setenv("GATEWAY_DATABASE__POSTGRES__AUTO_MIGRATE", "true")
+	t.Setenv("GATEWAY_AUTH__ADMIN_TOKEN", "dev-admin-token")
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, "postgres://localhost:5432/llm_gateway?sslmode=disable", cfg.Database.Postgres.DSN)
+	assert.True(t, cfg.Database.Postgres.AutoMigrate)
+	assert.Equal(t, 20, cfg.Database.Postgres.MaxConnections) // default
+	assert.True(t, cfg.Auth.Enabled)
+	assert.Equal(t, "dev-admin-token", cfg.Auth.AdminToken)
+	assert.Equal(t, 5*time.Minute, cfg.Auth.CacheTTL)
+	assert.Equal(t, 10000, cfg.Auth.CacheSize)
+}
+
+func TestLoad_AuthEnabledWithoutDSN_Error(t *testing.T) {
+	yamlContent := `
+providers:
+  openai:
+    base_url: "https://api.openai.com/v1"
+auth:
+  enabled: true
+`
+	path := writeTemp(t, yamlContent)
+	t.Setenv("GATEWAY_PROVIDERS__OPENAI__API_KEY", "sk-test")
+	t.Setenv("GATEWAY_AUTH__ADMIN_TOKEN", "dev-admin-token")
+
+	_, err := Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GATEWAY_DATABASE__POSTGRES__DSN")
+}
+
+func TestLoad_AuthEnabledWithoutAdminToken_Error(t *testing.T) {
+	yamlContent := `
+providers:
+  openai:
+    base_url: "https://api.openai.com/v1"
+auth:
+  enabled: true
+`
+	path := writeTemp(t, yamlContent)
+	t.Setenv("GATEWAY_PROVIDERS__OPENAI__API_KEY", "sk-test")
+	t.Setenv("GATEWAY_DATABASE__POSTGRES__DSN", "postgres://localhost:5432/llm_gateway")
+
+	_, err := Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GATEWAY_AUTH__ADMIN_TOKEN")
+}
+
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()

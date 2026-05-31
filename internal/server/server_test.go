@@ -8,14 +8,18 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/M4cr0Chen/llm-gateway/internal/auth"
+	"github.com/M4cr0Chen/llm-gateway/internal/handler"
 	"github.com/M4cr0Chen/llm-gateway/internal/model"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider"
 	"github.com/M4cr0Chen/llm-gateway/internal/server"
+	"github.com/M4cr0Chen/llm-gateway/internal/store"
 )
 
 type mockProvider struct {
@@ -23,7 +27,7 @@ type mockProvider struct {
 	models []string
 }
 
-func (m *mockProvider) Name() string    { return m.name }
+func (m *mockProvider) Name() string     { return m.name }
 func (m *mockProvider) Models() []string { return m.models }
 
 func (m *mockProvider) ChatCompletion(_ context.Context, _ *model.ChatCompletionRequest) (*model.ChatCompletionResponse, error) {
@@ -44,13 +48,19 @@ func (m *mockProvider) ChatCompletionStream(_ context.Context, _ *model.ChatComp
 	return ch, nil
 }
 
-func newTestServer() *server.Server {
+func newRegistry() *provider.Registry {
 	reg := provider.NewRegistry()
 	mock := &mockProvider{name: "test", models: []string{"test-model"}}
 	reg.Register(mock, mock.Models())
-	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	return server.New(reg, nil, logger)
+	return reg
 }
+
+func newTestServer() *server.Server {
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	return server.New(newRegistry(), server.Options{}, logger)
+}
+
+// --- pre-existing routes (unaffected by adding auth) ---
 
 func TestHealth(t *testing.T) {
 	srv := newTestServer()
@@ -107,4 +117,97 @@ func TestRequestIDHeader(t *testing.T) {
 	srv.Handler.ServeHTTP(w, r)
 
 	assert.NotEmpty(t, w.Header().Get("X-Request-Id"))
+}
+
+// --- auth-protected routes ---
+
+type fixedAuth struct {
+	want string
+	info *auth.KeyInfo
+}
+
+func (f *fixedAuth) Authenticate(_ context.Context, plaintext string) (*auth.KeyInfo, error) {
+	if plaintext == f.want {
+		return f.info, nil
+	}
+	return nil, auth.ErrInvalidKey
+}
+
+type recordingStore struct{}
+
+func (recordingStore) Create(_ context.Context, k *store.NewKey, hashHex, prefix string) (*store.APIKey, error) {
+	return &store.APIKey{ID: "k", KeyHash: hashHex, KeyPrefix: prefix, OrgID: k.OrgID, Name: k.Name, IsActive: true}, nil
+}
+func (recordingStore) GetByID(context.Context, string) (*store.APIKey, error) {
+	return nil, store.ErrNotFound
+}
+func (recordingStore) Revoke(context.Context, string) error { return nil }
+
+func newAuthedServer(t *testing.T) *server.Server {
+	t.Helper()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	fa := &fixedAuth{want: "sk-gw-good", info: &auth.KeyInfo{KeyID: "k", OrgID: "o"}}
+	adm := handler.NewAdminKeysHandler(recordingStore{}, nil)
+	return server.New(newRegistry(), server.Options{
+		Authenticator: fa,
+		AdminToken:    "admin-secret",
+		AdminKeys:     adm,
+	}, logger)
+}
+
+func TestAPIRoutes_RequireAuth_When_Authenticator_Set(t *testing.T) {
+	srv := newAuthedServer(t)
+
+	// Missing Bearer → 401.
+	r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	w := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(w, r)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+	// Valid Bearer → 200.
+	r = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	r.Header.Set("Authorization", "Bearer sk-gw-good")
+	w = httptest.NewRecorder()
+	srv.Handler.ServeHTTP(w, r)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestAdminRoutes_RequireAdminToken(t *testing.T) {
+	srv := newAuthedServer(t)
+
+	body := `{"org_id":"o1","name":"k1"}`
+
+	// Missing admin token → 401.
+	r := httptest.NewRequest(http.MethodPost, "/internal/admin/keys", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(w, r)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+	// Correct admin token → 201.
+	r = httptest.NewRequest(http.MethodPost, "/internal/admin/keys", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer admin-secret")
+	w = httptest.NewRecorder()
+	srv.Handler.ServeHTTP(w, r)
+	assert.Equal(t, http.StatusCreated, w.Code)
+}
+
+func TestAdminRoutes_NotMounted_When_Disabled(t *testing.T) {
+	srv := newTestServer() // no admin token / handler
+
+	r := httptest.NewRequest(http.MethodPost, "/internal/admin/keys", strings.NewReader(`{}`))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusNotFound, w.Code, "admin routes should not be mounted when disabled")
+}
+
+func TestPublicHealthStays_Unauthenticated_When_AuthEnabled(t *testing.T) {
+	srv := newAuthedServer(t)
+	r := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(w, r)
+	assert.Equal(t, http.StatusOK, w.Code)
 }
