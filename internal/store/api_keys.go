@@ -101,19 +101,23 @@ func (s *APIKeyStore) Create(ctx context.Context, k *NewKey, hashHex, prefix str
 	return &out, nil
 }
 
-// Revoke marks a key inactive. It is idempotent: revoking an unknown or
-// already-revoked id is not an error.
+// Revoke marks a key inactive. It is idempotent: revoking an unknown,
+// already-revoked, or non-UUID-shaped id is not an error.
 func (s *APIKeyStore) Revoke(ctx context.Context, id string) error {
 	const q = `UPDATE api_keys SET is_active = FALSE WHERE id = $1`
 	_, err := s.pool.Exec(ctx, q, id)
 	if err != nil {
+		if errors.Is(mapPgError(err), ErrNotFound) {
+			return nil
+		}
 		return fmt.Errorf("revoking api_key: %w", err)
 	}
 	return nil
 }
 
 // GetByID fetches a key (active or not) by id. Used by Revoke flows that
-// need the hash to invalidate the cache.
+// need the hash to invalidate the cache. A malformed (non-UUID) id is
+// surfaced as ErrNotFound so callers can treat it identically to a miss.
 func (s *APIKeyStore) GetByID(ctx context.Context, id string) (*APIKey, error) {
 	const q = `
 		SELECT id, key_hash, key_prefix, org_id, name, scopes,
@@ -130,6 +134,9 @@ func (s *APIKeyStore) GetByID(ctx context.Context, id string) (*APIKey, error) {
 		&k.CreatedAt, &k.ExpiresAt, &k.LastUsedAt,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		if mapped := mapPgError(err); errors.Is(mapped, ErrNotFound) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("scanning api_key: %w", err)

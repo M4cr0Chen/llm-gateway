@@ -115,6 +115,41 @@ func TestCached_Invalidate(t *testing.T) {
 	assert.EqualValues(t, 2, f.getCalls.Load(), "after invalidate, next lookup should hit the store")
 }
 
+func TestCached_RejectsExpiredHitWithoutRehittingDB(t *testing.T) {
+	plaintext := "sk-gw-shortlived"
+	hash := HashKey(plaintext)
+
+	// Seed the row so the first lookup populates the cache with a future
+	// expiry, then swap the cached entry's ExpiresAt to the past to
+	// simulate it ageing out during the cache TTL.
+	future := time.Now().Add(time.Hour)
+	f := newFakeLookup()
+	f.keysByHash[hash] = &store.APIKey{
+		ID: "k-exp", OrgID: "o1", Name: "shortlived",
+		RateLimitRPM: 60, RateLimitTPM: 100000, ExpiresAt: &future,
+	}
+
+	c := NewCached(f, time.Minute, 16)
+
+	_, err := c.Authenticate(context.Background(), plaintext)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, f.getCalls.Load())
+
+	// Reach into the cache and pull the live entry so we can age it.
+	cached, ok := c.pos.Get(hash)
+	require.True(t, ok)
+	past := time.Now().Add(-time.Minute)
+	cached.ExpiresAt = &past
+
+	_, err = c.Authenticate(context.Background(), plaintext)
+	assert.ErrorIs(t, err, ErrInvalidKey, "expired entry should be rejected even when still in cache")
+
+	// Subsequent lookups should hit the negative cache, NOT the DB.
+	_, err = c.Authenticate(context.Background(), plaintext)
+	assert.ErrorIs(t, err, ErrInvalidKey)
+	assert.EqualValues(t, 1, f.getCalls.Load(), "expired hit must not re-query the store")
+}
+
 func TestCached_TouchDebounce(t *testing.T) {
 	plaintext := "sk-gw-touchme"
 	hash := HashKey(plaintext)

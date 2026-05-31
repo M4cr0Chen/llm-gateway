@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/golang-migrate/migrate/v4"
 	pgxmigrate "github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -21,7 +22,12 @@ func RunMigrations(dsn string) error {
 		return fmt.Errorf("opening embedded migrations: %w", err)
 	}
 
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsnForMigrate(dsn))
+	migrateDSN, err := dsnForMigrate(dsn)
+	if err != nil {
+		return fmt.Errorf("normalising dsn: %w", err)
+	}
+
+	m, err := migrate.NewWithSourceInstance("iofs", src, migrateDSN)
 	if err != nil {
 		return fmt.Errorf("creating migrate instance: %w", err)
 	}
@@ -40,21 +46,28 @@ func RunMigrations(dsn string) error {
 	return nil
 }
 
-// dsnForMigrate prefixes the DSN with the pgx/v5 scheme expected by
-// the golang-migrate driver. Standard "postgres://" URIs are accepted
-// as-is by re-prefixing with "pgx5://".
-func dsnForMigrate(dsn string) string {
-	// pgxmigrate registers itself under the "pgx5" scheme.
+// dsnForMigrate normalises the DSN into the URI form expected by the
+// pgx5 golang-migrate driver. URL-form DSNs (postgres:// or postgresql://)
+// are re-prefixed; libpq key=value DSNs (e.g. "host=localhost dbname=foo")
+// are rejected with a clear message because the migrate driver does not
+// accept them.
+func dsnForMigrate(dsn string) (string, error) {
 	const scheme = "pgx5://"
-	for _, prefix := range []string{"postgres://", "postgresql://"} {
-		if len(dsn) > len(prefix) && dsn[:len(prefix)] == prefix {
-			return scheme + dsn[len(prefix):]
-		}
+	switch {
+	case strings.HasPrefix(dsn, scheme):
+		return dsn, nil
+	case strings.HasPrefix(dsn, "postgres://"):
+		return scheme + strings.TrimPrefix(dsn, "postgres://"), nil
+	case strings.HasPrefix(dsn, "postgresql://"):
+		return scheme + strings.TrimPrefix(dsn, "postgresql://"), nil
 	}
-	if len(dsn) > len(scheme) && dsn[:len(scheme)] == scheme {
-		return dsn
+	// A libpq DSN has space-separated key=value pairs and no "://". Detect
+	// the shape so the operator gets an actionable error instead of an
+	// opaque migrate failure.
+	if strings.Contains(dsn, "=") && !strings.Contains(dsn, "://") {
+		return "", fmt.Errorf("libpq key=value DSNs are not supported for migrations; use postgres:// URL form")
 	}
-	return scheme + dsn
+	return "", fmt.Errorf("unrecognised DSN format; expected postgres:// URL")
 }
 
 // Ensure pgx5 driver is registered.

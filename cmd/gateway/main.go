@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"sort"
+	"syscall"
+	"time"
 
 	"github.com/M4cr0Chen/llm-gateway/internal/auth"
 	"github.com/M4cr0Chen/llm-gateway/internal/config"
@@ -19,6 +23,10 @@ import (
 	"github.com/M4cr0Chen/llm-gateway/internal/server"
 	"github.com/M4cr0Chen/llm-gateway/internal/store"
 )
+
+// shutdownTimeout caps how long graceful shutdown waits for in-flight
+// requests to finish before forcibly closing connections.
+const shutdownTimeout = 30 * time.Second
 
 func main() {
 	configPath := os.Getenv("GATEWAY_CONFIG_PATH")
@@ -56,9 +64,34 @@ func main() {
 		WriteTimeout: cfg.Server.WriteTimeout,
 	}
 
-	slog.Info("starting llm-gateway", "addr", addr)
-	if err := httpServer.ListenAndServe(); err != nil {
-		log.Fatal(err)
+	// Wire SIGINT/SIGTERM to a context so the server (and any deferred
+	// cleanup, like releasing the Postgres pool) can shut down cleanly
+	// instead of being killed mid-request.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serverErr := make(chan error, 1)
+	go func() {
+		slog.Info("starting llm-gateway", "addr", addr)
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- err
+		}
+		close(serverErr)
+	}()
+
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			slog.Error("http server stopped with error", "err", err)
+			os.Exit(1)
+		}
+	case <-ctx.Done():
+		slog.Info("shutdown signal received, draining")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			slog.Error("graceful shutdown failed", "err", err)
+		}
 	}
 }
 

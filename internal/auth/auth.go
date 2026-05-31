@@ -7,18 +7,20 @@ package auth
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // KeyInfo describes an authenticated API key. It is attached to the
 // request context by RequireAPIKey middleware so downstream handlers can
 // scope behaviour to the owning organisation.
 type KeyInfo struct {
-	KeyID  string
-	OrgID  string
-	Name   string
-	RPM    int
-	TPM    int
-	Scopes []string
+	KeyID     string
+	OrgID     string
+	Name      string
+	RPM       int
+	TPM       int
+	Scopes    []string
+	ExpiresAt *time.Time // carried in cache so hits can re-check expiry
 }
 
 // Authenticator resolves a plaintext API key to a KeyInfo. Implementations
