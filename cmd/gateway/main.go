@@ -157,7 +157,13 @@ func buildProviders(cfg *config.Config) (*provider.Registry, map[string]*provide
 	for _, alias := range aliasKeys {
 		target := cfg.ModelAliases[alias]
 		if err := registry.RegisterAlias(alias, target); err != nil {
-			log.Fatalf("failed to register model alias %q -> %q: %v", alias, target, err)
+			// A dangling alias (target provider intentionally disabled, or
+			// not yet configured) shouldn't take the whole gateway down —
+			// the alias just won't be resolvable. Surface a WARN so it's
+			// visible without killing the process.
+			slog.Warn("skipping model alias with unregistered target",
+				"alias", alias, "target", target, "err", err)
+			continue
 		}
 		slog.Info("registered model alias", "alias", alias, "target", target)
 	}
