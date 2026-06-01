@@ -49,9 +49,16 @@ database:
     dsn: ""               # GATEWAY_DATABASE__POSTGRES__DSN (env-only)
     auto_migrate: false   # GATEWAY_DATABASE__POSTGRES__AUTO_MIGRATE
     max_connections: 20
+  redis:
+    dsn: ""               # GATEWAY_DATABASE__REDIS__DSN (env-only)
 
 auth:
   enabled: true
   admin_token: ""         # GATEWAY_AUTH__ADMIN_TOKEN (env-only)
   cache_ttl: 5m
   cache_size: 10000
+
+rate_limit:
+  enabled: true
+  default_rpm: 60
+  default_tpm: 100000

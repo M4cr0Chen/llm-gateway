@@ -20,6 +20,7 @@ import (
 	"github.com/M4cr0Chen/llm-gateway/internal/provider/anthropic"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider/google"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider/openai"
+	"github.com/M4cr0Chen/llm-gateway/internal/ratelimit"
 	"github.com/M4cr0Chen/llm-gateway/internal/server"
 	"github.com/M4cr0Chen/llm-gateway/internal/store"
 )
@@ -49,11 +50,17 @@ func main() {
 		defer closer()
 	}
 
+	limiter, limiterCloser := buildRateLimiter(cfg)
+	if limiterCloser != nil {
+		defer limiterCloser()
+	}
+
 	srv := server.New(registry, server.Options{
 		HealthProviders: healthProviders,
 		Authenticator:   authenticator,
 		AdminToken:      cfg.Auth.AdminToken,
 		AdminKeys:       adminKeys,
+		RateLimiter:     limiter,
 	}, slog.Default())
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
@@ -198,6 +205,23 @@ func buildAuth(cfg *config.Config) (auth.Authenticator, *handler.AdminKeysHandle
 	cached := auth.NewCached(keysStore, cfg.Auth.CacheTTL, cfg.Auth.CacheSize)
 	adminHandler := handler.NewAdminKeysHandler(keysStore, cached.Invalidate)
 	return cached, adminHandler, pool.Close
+}
+
+// buildRateLimiter constructs the Redis-backed rate limiter when the
+// `rate_limit` section is enabled, mirroring how buildAuth gates Postgres
+// behind cfg.Auth.Enabled. A failure to reach Redis at startup is fatal
+// — running with rate limiting silently disabled would let unauthorised
+// traffic through and is worse than refusing to boot.
+func buildRateLimiter(cfg *config.Config) (ratelimit.Reserver, func()) {
+	if !cfg.RateLimit.Enabled {
+		return nil, nil
+	}
+	ctx := context.Background()
+	rdb, err := store.NewRedis(ctx, cfg.Database.Redis.DSN)
+	if err != nil {
+		log.Fatalf("failed to connect to redis: %v", err)
+	}
+	return ratelimit.NewRedis(rdb, cfg.RateLimit), func() { _ = rdb.Close() }
 }
 
 func setupLogger(cfg config.LogConfig) {
