@@ -38,6 +38,7 @@ func New(registry *provider.Registry, opts Options, logger *slog.Logger) *Server
 	r := chi.NewRouter()
 
 	r.Use(chimw.RequestID)
+	r.Use(middleware.Observe())
 	r.Use(chimw.Recoverer)
 	r.Use(middleware.RequestLogger(logger))
 

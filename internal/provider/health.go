@@ -93,6 +93,16 @@ func (h *ProviderHealth) IsHealthy() bool {
 	return h.now().Sub(h.lastFailure) >= h.cooldownPeriod
 }
 
+// HealthyStrict returns the underlying healthy flag without the
+// cooldown-permissive smoothing applied by IsHealthy/Status. The metrics
+// gauge uses this so it reflects threshold-tipped state rather than the
+// permissive cooldown view.
+func (h *ProviderHealth) HealthyStrict() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.healthy
+}
+
 // Status returns a point-in-time snapshot of the provider's health.
 func (h *ProviderHealth) Status() HealthStatus {
 	h.mu.RLock()

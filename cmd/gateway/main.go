@@ -10,8 +10,11 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"sync"
 	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/M4cr0Chen/llm-gateway/internal/auth"
 	"github.com/M4cr0Chen/llm-gateway/internal/config"
@@ -71,6 +74,8 @@ func main() {
 		WriteTimeout: cfg.Server.WriteTimeout,
 	}
 
+	metricsServer := buildMetricsServer(cfg.Metrics)
+
 	// Wire SIGINT/SIGTERM to a context so the server (and any deferred
 	// cleanup, like releasing the Postgres pool) can shut down cleanly
 	// instead of being killed mid-request.
@@ -86,20 +91,81 @@ func main() {
 		close(serverErr)
 	}()
 
+	metricsErr := make(chan error, 1)
+	if metricsServer != nil {
+		go func() {
+			slog.Info("starting metrics server", "addr", metricsServer.Addr)
+			if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				metricsErr <- err
+			}
+			close(metricsErr)
+		}()
+	} else {
+		close(metricsErr)
+	}
+
+	exitCode := 0
 	select {
 	case err := <-serverErr:
 		if err != nil {
 			slog.Error("http server stopped with error", "err", err)
-			os.Exit(1)
+			exitCode = 1
+		}
+	case err := <-metricsErr:
+		if err != nil {
+			slog.Error("metrics server stopped with error", "err", err)
+			exitCode = 1
 		}
 	case <-ctx.Done():
 		slog.Info("shutdown signal received, draining")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			slog.Error("graceful shutdown failed", "err", err)
-		}
 	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	shutdownAll(shutdownCtx, httpServer, metricsServer)
+
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
+}
+
+// buildMetricsServer constructs the second HTTP server that exposes the
+// Prometheus scrape endpoint on /metrics and a simple /health probe.
+// Returns nil when metrics are disabled so the caller can skip starting
+// the goroutine entirely.
+func buildMetricsServer(cfg config.MetricsConfig) *http.Server {
+	if !cfg.Enabled {
+		return nil
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	return &http.Server{
+		Addr:              fmt.Sprintf(":%d", cfg.Port),
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+}
+
+// shutdownAll drains both servers concurrently within the shared context
+// timeout so neither one blocks the other.
+func shutdownAll(ctx context.Context, servers ...*http.Server) {
+	var wg sync.WaitGroup
+	for _, s := range servers {
+		if s == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(s *http.Server) {
+			defer wg.Done()
+			if err := s.Shutdown(ctx); err != nil {
+				slog.Error("graceful shutdown failed", "addr", s.Addr, "err", err)
+			}
+		}(s)
+	}
+	wg.Wait()
 }
 
 func buildProviders(cfg *config.Config) (*provider.Registry, map[string]*provider.HealthTrackingProvider) {

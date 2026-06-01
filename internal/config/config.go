@@ -12,6 +12,7 @@ type Config struct {
 	Database     DatabaseConfig            `koanf:"database"`
 	Auth         AuthConfig                `koanf:"auth"`
 	RateLimit    RateLimitConfig           `koanf:"rate_limit"`
+	Metrics      MetricsConfig             `koanf:"metrics"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -82,4 +83,14 @@ type RateLimitConfig struct {
 	Enabled    bool `koanf:"enabled"`
 	DefaultRPM int  `koanf:"default_rpm"`
 	DefaultTPM int  `koanf:"default_tpm"`
+}
+
+// MetricsConfig holds Prometheus scrape-endpoint settings. When Enabled
+// is true the gateway starts a second HTTP server on Port serving
+// /metrics (Prometheus exposition) and /health. The scrape server is
+// intentionally separate from the public API server so scrape traffic
+// can have a different network policy.
+type MetricsConfig struct {
+	Enabled bool `koanf:"enabled"`
+	Port    int  `koanf:"port"`
 }
