@@ -80,9 +80,61 @@ func TestRateLimit_AllowedSetsXRateLimitHeaders(t *testing.T) {
 	assert.Equal(t, "60", rec.Header().Get("X-RateLimit-Limit-Requests"))
 	assert.Equal(t, "42", rec.Header().Get("X-RateLimit-Remaining-Requests"))
 	assert.Equal(t, "30s", rec.Header().Get("X-RateLimit-Reset-Requests"))
+	assert.Empty(t, rec.Header().Get("X-RateLimit-Limit-Tokens"), "TPM headers absent when TpmLimit=0")
 	assert.Empty(t, rec.Header().Get("Retry-After"), "Retry-After only on 429")
 	assert.JSONEq(t, `{"usage":{"total_tokens":1234}}`, rec.Body.String())
 	assert.Equal(t, []int{1234}, fr.recordedSnapshot(), "non-streaming JSON usage is recorded")
+}
+
+func TestRateLimit_AllowedSetsXRateLimitTokensHeaders(t *testing.T) {
+	fr := &fakeReserver{nextRes: ratelimit.Reservation{
+		Allowed:      true,
+		Limit:        60,
+		Remaining:    42,
+		Reset:        30 * time.Second,
+		TpmLimit:     100000,
+		TpmRemaining: 75000,
+		TpmReset:     45 * time.Second,
+	}}
+	mw := RateLimit(fr)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, withKeyInfo(httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)))
+
+	assert.Equal(t, "60", rec.Header().Get("X-RateLimit-Limit-Requests"))
+	assert.Equal(t, "42", rec.Header().Get("X-RateLimit-Remaining-Requests"))
+	assert.Equal(t, "30s", rec.Header().Get("X-RateLimit-Reset-Requests"))
+	assert.Equal(t, "100000", rec.Header().Get("X-RateLimit-Limit-Tokens"))
+	assert.Equal(t, "75000", rec.Header().Get("X-RateLimit-Remaining-Tokens"))
+	assert.Equal(t, "45s", rec.Header().Get("X-RateLimit-Reset-Tokens"))
+}
+
+func TestRateLimit_TpmOnlyKeyEmitsOnlyTokensHeaders(t *testing.T) {
+	// A key with TPM throttling only (Limit=0, TpmLimit>0) should see the
+	// Tokens headers but not the Requests headers.
+	fr := &fakeReserver{nextRes: ratelimit.Reservation{
+		Allowed:      true,
+		TpmLimit:     100000,
+		TpmRemaining: 100000,
+		TpmReset:     45 * time.Second,
+	}}
+	mw := RateLimit(fr)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, withKeyInfo(httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)))
+
+	assert.Empty(t, rec.Header().Get("X-RateLimit-Limit-Requests"), "RPM headers absent when Limit=0")
+	assert.Equal(t, "100000", rec.Header().Get("X-RateLimit-Limit-Tokens"))
+	assert.Equal(t, "100000", rec.Header().Get("X-RateLimit-Remaining-Tokens"))
+	assert.Equal(t, "45s", rec.Header().Get("X-RateLimit-Reset-Tokens"))
 }
 
 func TestRateLimit_RejectedReturns429WithRetryAfter(t *testing.T) {
@@ -294,4 +346,72 @@ func TestRateLimit_RetryAfterAlwaysAtLeastOneSecond(t *testing.T) {
 	got, err := strconv.Atoi(rec.Header().Get("Retry-After"))
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, got, 1)
+}
+
+func TestRateLimit_CaptureBodyOverflowFlushesAndSkipsTokens(t *testing.T) {
+	// A response body larger than captureBodyLimit transitions out of
+	// buffer mode mid-flight. Verify (a) every byte still reaches the
+	// client, and (b) the over-limit body is *not* parsed for usage, so
+	// RecordTokens is never called.
+	fr := &fakeReserver{nextRes: ratelimit.Reservation{Allowed: true, Limit: 60, Remaining: 59}}
+
+	const chunkSize = 512 * 1024 // 512 KiB
+	// chunk1 fits the buffer; chunk2 pushes us past 1 MiB and triggers the
+	// replay-then-passthrough branch; chunk3 takes the pure-passthrough
+	// branch where exceededLimit is already set.
+	chunk1 := bytes.Repeat([]byte{'a'}, chunkSize)
+	chunk2 := bytes.Repeat([]byte{'b'}, chunkSize+1) // crosses 1 MiB
+	chunk3 := bytes.Repeat([]byte{'c'}, chunkSize)
+
+	mw := RateLimit(fr)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(chunk1)
+		_, _ = w.Write(chunk2)
+		_, _ = w.Write(chunk3)
+	}))
+
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, withKeyInfo(httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, len(chunk1)+len(chunk2)+len(chunk3), rec.Body.Len(),
+		"every buffered + passthrough byte reaches the client")
+	assert.Equal(t, byte('a'), rec.Body.Bytes()[0], "first byte of buffered prefix")
+	assert.Equal(t, byte('c'), rec.Body.Bytes()[rec.Body.Len()-1], "last byte of passthrough chunk")
+	assert.Empty(t, fr.recordedSnapshot(), "over-limit responses skip RecordTokens")
+}
+
+func TestRateLimit_FailOpenWarnReEmitsAfterInterval(t *testing.T) {
+	// Verifies the throttle's *expiry* side: after the configured window
+	// elapses, a fresh fail-open warn is allowed to log again.
+	fr := &fakeReserver{nextErr: errors.New("redis dial: connection refused")}
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	orig := failOpenWarnInterval
+	failOpenWarnInterval = 30 * time.Millisecond
+	t.Cleanup(func() { failOpenWarnInterval = orig })
+
+	mw := RateLimit(fr)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	fire := func() {
+		req := withKeyInfo(httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil))
+		req = req.WithContext(WithLogger(req.Context(), logger))
+		mw.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	fire() // first WARN logs
+	fire() // throttled
+	assert.Equal(t, 1, strings.Count(logBuf.String(), "fail-open"),
+		"second WARN within the window is suppressed")
+
+	time.Sleep(50 * time.Millisecond) // exceed the 30ms throttle window
+
+	fire() // second WARN logs after the window
+	assert.Equal(t, 2, strings.Count(logBuf.String(), "fail-open"),
+		"WARN re-emits once the throttle window elapses")
 }

@@ -26,8 +26,11 @@ package ratelimit
 
 import (
 	"context"
+	"crypto/rand"
 	_ "embed"
+	"encoding/hex"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -35,6 +38,13 @@ import (
 
 	"github.com/M4cr0Chen/llm-gateway/internal/auth"
 	"github.com/M4cr0Chen/llm-gateway/internal/config"
+)
+
+// reject codes returned by check.lua (see check.lua's header comment).
+const (
+	rejectOK  = 0
+	rejectRPM = 1
+	rejectTPM = 2
 )
 
 //go:embed check.lua
@@ -59,13 +69,19 @@ type Limiter interface {
 
 // Reservation captures the post-decision state of a rate-limit check and
 // is the payload consumed by the rate-limit middleware when populating
-// the X-RateLimit-* response headers.
+// the X-RateLimit-* response headers. The RPM-side fields are populated
+// whenever an RPM limit is configured; the TPM-side fields are populated
+// whenever a TPM limit is configured. A zero Limit / TpmLimit means that
+// dimension is unlimited and the middleware skips its headers.
 type Reservation struct {
-	Allowed    bool
-	Limit      int           // configured RPM for this key
-	Remaining  int           // max(0, Limit - rpm_used)
-	Reset      time.Duration // time until the oldest live RPM entry ages out
-	RetryAfter time.Duration // > 0 only when Allowed == false
+	Allowed      bool
+	Limit        int           // configured RPM for this key (0 → unlimited)
+	Remaining    int           // max(0, Limit - rpm_used)
+	Reset        time.Duration // time until the oldest live RPM entry ages out
+	TpmLimit     int           // configured TPM for this key (0 → unlimited)
+	TpmRemaining int           // max(0, TpmLimit - tpm_used)
+	TpmReset     time.Duration // time until the oldest live TPM entry ages out
+	RetryAfter   time.Duration // > 0 only when Allowed == false
 }
 
 // Reserver is the richer interface used by the middleware. Reserve gates
@@ -128,9 +144,28 @@ func (r *redisLimiter) tpmKey(key KeyInfo) string {
 // silently dedupe and the RPM count would skew low under high concurrency.
 var reqIDCounter atomic.Uint64
 
+// instanceID is a per-process random prefix attached to every reqID. With
+// only a (ms, counter) suffix, two gateway instances sharing the same
+// Redis would emit identical members for their first concurrent requests
+// (both counters start at 1) and ZADD would silently dedupe them — the
+// RPM ZSET would then undercount across the fleet. A 6-byte random prefix
+// makes cross-instance collisions astronomically unlikely.
+var instanceID = newInstanceID()
+
+func newInstanceID() string {
+	var b [6]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failure at init time is exceedingly unlikely; fall
+		// back to a nanosecond-resolution timestamp so we still get a
+		// process-specific prefix even in the degenerate case.
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(b[:])
+}
+
 func newReqID(nowMs int64) string {
 	n := reqIDCounter.Add(1)
-	return fmt.Sprintf("%d-%d", nowMs, n)
+	return fmt.Sprintf("%s-%d-%d", instanceID, nowMs, n)
 }
 
 // AllowRequest satisfies Limiter; it discards the headers payload.
@@ -150,7 +185,7 @@ func (r *redisLimiter) Reserve(ctx context.Context, key KeyInfo) (Reservation, e
 	rpm := r.effectiveRPM(key)
 	tpm := r.effectiveTPM(key)
 	if rpm <= 0 && tpm <= 0 {
-		return Reservation{Allowed: true, Limit: 0}, nil
+		return Reservation{Allowed: true}, nil
 	}
 
 	nowMs := time.Now().UnixMilli()
@@ -170,21 +205,28 @@ func (r *redisLimiter) Reserve(ctx context.Context, key KeyInfo) (Reservation, e
 	}
 
 	res := Reservation{
-		Limit:   rpm,
-		Allowed: parsed.allowed,
-		Reset:   computeReset(nowMs, parsed.oldestMs, windowMs),
+		Limit:    rpm,
+		TpmLimit: tpm,
+		Allowed:  parsed.allowed,
+		Reset:    computeReset(nowMs, parsed.rpmOldestMs, windowMs),
+		TpmReset: computeReset(nowMs, parsed.tpmOldestMs, windowMs),
 	}
-	if parsed.used > rpm {
-		res.Remaining = 0
-	} else {
-		res.Remaining = rpm - parsed.used
-	}
+	res.Remaining = clampRemaining(rpm, parsed.rpmUsed)
+	res.TpmRemaining = clampRemaining(tpm, int(parsed.tpmUsed))
 	if !parsed.allowed {
-		// Both rejection paths surface the RPM-window reset as Retry-After.
-		// For TPM-driven rejection this is an over-estimate (true wait would
-		// be the time for enough tokens to age out), but the simpler shape
-		// keeps the script lean and clients only need an upper bound to retry.
-		res.RetryAfter = res.Reset
+		// Retry-After uses the dimension that triggered rejection: RPM
+		// reset for RPM rejection, TPM reset for TPM rejection. For TPM
+		// this is the time until the oldest token entry ages out — only a
+		// lower bound on actual relief, since the next request can still
+		// be rejected if the freed tokens don't cover its size. Clients
+		// should treat Retry-After as "earliest moment a retry could
+		// succeed", not a guarantee.
+		switch parsed.code {
+		case rejectRPM:
+			res.RetryAfter = res.Reset
+		case rejectTPM:
+			res.RetryAfter = res.TpmReset
+		}
 		if res.RetryAfter <= 0 {
 			res.RetryAfter = r.window
 		}
@@ -192,44 +234,43 @@ func (r *redisLimiter) Reserve(ctx context.Context, key KeyInfo) (Reservation, e
 	return res, nil
 }
 
+func clampRemaining(limit, used int) int {
+	if limit <= 0 || used >= limit {
+		return 0
+	}
+	return limit - used
+}
+
 type checkResult struct {
-	allowed  bool
-	code     int   // 0 ok, 1 rpm rejected, 2 tpm rejected
-	used     int   // rpm count (post-add if allowed, pre-add if rejected)
-	oldestMs int64 // oldest live RPM entry's score
-	tpmUsed  int64
+	allowed     bool
+	code        int   // 0 ok, 1 rpm rejected, 2 tpm rejected
+	rpmUsed     int   // rpm count (post-add if allowed, pre-add if rejected)
+	rpmOldestMs int64 // oldest live RPM entry's score (or now if empty)
+	tpmUsed     int64
+	tpmOldestMs int64 // oldest live TPM entry's score (or now if empty)
 }
 
 func parseCheckResult(out []interface{}) (checkResult, error) {
-	if len(out) != 5 {
-		return checkResult{}, fmt.Errorf("check script: got %d values, want 5", len(out))
+	const want = 6
+	if len(out) != want {
+		return checkResult{}, fmt.Errorf("check script: got %d values, want %d", len(out), want)
 	}
-	a, ok := out[0].(int64)
-	if !ok {
-		return checkResult{}, fmt.Errorf("check script: allowed not int64 (%T)", out[0])
-	}
-	c, ok := out[1].(int64)
-	if !ok {
-		return checkResult{}, fmt.Errorf("check script: code not int64 (%T)", out[1])
-	}
-	u, ok := out[2].(int64)
-	if !ok {
-		return checkResult{}, fmt.Errorf("check script: used not int64 (%T)", out[2])
-	}
-	o, ok := out[3].(int64)
-	if !ok {
-		return checkResult{}, fmt.Errorf("check script: oldest not int64 (%T)", out[3])
-	}
-	t, ok := out[4].(int64)
-	if !ok {
-		return checkResult{}, fmt.Errorf("check script: tpm not int64 (%T)", out[4])
+	fields := [want]int64{}
+	names := [want]string{"allowed", "code", "rpm_used", "rpm_oldest_ms", "tpm_used", "tpm_oldest_ms"}
+	for i, v := range out {
+		n, ok := v.(int64)
+		if !ok {
+			return checkResult{}, fmt.Errorf("check script: %s not int64 (%T)", names[i], v)
+		}
+		fields[i] = n
 	}
 	return checkResult{
-		allowed:  a == 1,
-		code:     int(c),
-		used:     int(u),
-		oldestMs: o,
-		tpmUsed:  t,
+		allowed:     fields[0] == 1,
+		code:        int(fields[1]),
+		rpmUsed:     int(fields[2]),
+		rpmOldestMs: fields[3],
+		tpmUsed:     fields[4],
+		tpmOldestMs: fields[5],
 	}, nil
 }
 

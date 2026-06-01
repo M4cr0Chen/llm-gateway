@@ -3,8 +3,8 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -18,7 +18,9 @@ import (
 // failOpenWarnInterval throttles the WARN log emitted when Redis is
 // unreachable. The first failure logs immediately; subsequent failures
 // within this window are suppressed so an outage doesn't flood the log.
-const failOpenWarnInterval = 5 * time.Second
+// Declared as a var (not a const) so tests can shorten the window without
+// resorting to clock injection.
+var failOpenWarnInterval = 5 * time.Second
 
 // captureBodyLimit caps the response buffer used to parse `usage.total_tokens`
 // out of non-streaming responses. Beyond this limit we stop buffering and
@@ -71,24 +73,26 @@ func (s *rateLimitState) serve(next http.Handler, w http.ResponseWriter, r *http
 
 	res, err := s.reserver.Reserve(r.Context(), *info)
 	if err != nil {
+		// Fail-open: log a throttled WARN and let the request through. We
+		// deliberately don't emit X-RateLimit-* headers here — without a
+		// successful check the values would be guesses, and an absent
+		// header is a clearer "limits unavailable right now" signal than
+		// a stale one.
 		s.warnFailOpen(r, err)
-		// Best-effort permissive headers so clients still see *some*
-		// budget; the absence of a Retry-After signals "no rejection".
-		setRateLimitHeaders(w, res.Limit, res.Limit, 0)
 		next.ServeHTTP(w, r)
 		return
 	}
 
-	setRateLimitHeaders(w, res.Limit, res.Remaining, res.Reset)
+	setRateLimitHeaders(w, res)
 
 	if !res.Allowed {
 		apierr.WriteRateLimit(w, res.RetryAfter, "")
 		return
 	}
 
-	cap := &usageCaptureWriter{ResponseWriter: w}
-	next.ServeHTTP(cap, r)
-	cap.finish(r, s.reserver, *info)
+	cw := &usageCaptureWriter{ResponseWriter: w}
+	next.ServeHTTP(cw, r)
+	cw.finish(r, s.reserver, *info)
 }
 
 func (s *rateLimitState) warnFailOpen(r *http.Request, err error) {
@@ -106,17 +110,29 @@ func (s *rateLimitState) warnFailOpen(r *http.Request, err error) {
 	)
 }
 
-func setRateLimitHeaders(w http.ResponseWriter, limit, remaining int, reset time.Duration) {
-	if limit <= 0 {
-		return
-	}
+// setRateLimitHeaders emits the OpenAI-compatible rate-limit headers for
+// both dimensions present in the Reservation. RPM headers are written iff
+// res.Limit > 0; TPM headers are written iff res.TpmLimit > 0 — so a key
+// throttled on requests only (or tokens only) sees only the relevant set.
+func setRateLimitHeaders(w http.ResponseWriter, res ratelimit.Reservation) {
 	h := w.Header()
-	h.Set("X-RateLimit-Limit-Requests", fmtInt(limit))
-	if remaining < 0 {
-		remaining = 0
+	if res.Limit > 0 {
+		h.Set("X-RateLimit-Limit-Requests", strconv.Itoa(res.Limit))
+		h.Set("X-RateLimit-Remaining-Requests", strconv.Itoa(clampNonNegative(res.Remaining)))
+		h.Set("X-RateLimit-Reset-Requests", roundDurationToSecond(res.Reset).String())
 	}
-	h.Set("X-RateLimit-Remaining-Requests", fmtInt(remaining))
-	h.Set("X-RateLimit-Reset-Requests", roundDurationToSecond(reset).String())
+	if res.TpmLimit > 0 {
+		h.Set("X-RateLimit-Limit-Tokens", strconv.Itoa(res.TpmLimit))
+		h.Set("X-RateLimit-Remaining-Tokens", strconv.Itoa(clampNonNegative(res.TpmRemaining)))
+		h.Set("X-RateLimit-Reset-Tokens", roundDurationToSecond(res.TpmReset).String())
+	}
+}
+
+func clampNonNegative(n int) int {
+	if n < 0 {
+		return 0
+	}
+	return n
 }
 
 // roundDurationToSecond rounds the duration up to the nearest whole
@@ -131,10 +147,6 @@ func roundDurationToSecond(d time.Duration) time.Duration {
 		secs++
 	}
 	return time.Duration(secs) * time.Second
-}
-
-func fmtInt(n int) string {
-	return fmt.Sprintf("%d", n)
 }
 
 // usageCaptureWriter wraps a ResponseWriter to record `usage.total_tokens`
@@ -253,6 +265,15 @@ func (cw *usageCaptureWriter) finish(r *http.Request, reserver ratelimit.Reserve
 
 	// Only attempt token parsing on 2xx — error bodies don't carry
 	// `usage` and we don't want to record tokens for failed requests.
+	//
+	// RecordTokens is called synchronously *before* the response flushes:
+	// this guarantees the next concurrent request from the same key sees
+	// this request's tokens in its TPM sum, which keeps the limit honest
+	// under burst traffic. The cost is one extra Redis round-trip on the
+	// success path; for a TPM check we'd otherwise lose a window's worth
+	// of accuracy. If that latency becomes a problem we can move this to
+	// a background goroutine with a derived context, accepting looser
+	// TPM bounds during bursts.
 	if cw.status >= 200 && cw.status < 300 && !cw.exceededLimit && len(body) > 0 {
 		var parsed struct {
 			Usage model.Usage `json:"usage"`

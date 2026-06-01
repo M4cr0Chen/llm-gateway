@@ -15,12 +15,13 @@
 -- ARGV[4]: tpm limit (0 → unlimited)
 -- ARGV[5]: request_id (unique RPM member)
 --
--- Returns:  {allowed, reject_code, rpm_used, rpm_oldest_ms, tpm_used}
+-- Returns:  {allowed, reject_code, rpm_used, rpm_oldest_ms, tpm_used, tpm_oldest_ms}
 --   allowed       1 = pass, 0 = reject
 --   reject_code   0 = ok, 1 = rpm rejected, 2 = tpm rejected
 --   rpm_used      post-add count if allowed; pre-add count if rejected
 --   rpm_oldest_ms score of the oldest live RPM entry (or `now` if empty)
 --   tpm_used      sum of tokens in the live TPM window
+--   tpm_oldest_ms score of the oldest live TPM entry (or `now` if empty)
 
 local rpm_key = KEYS[1]
 local tpm_key = KEYS[2]
@@ -44,10 +45,11 @@ redis.call('ZREMRANGEBYSCORE', rpm_key, '-inf', now - window)
 local rpm_count = redis.call('ZCARD', rpm_key)
 
 if rpm_lim > 0 and rpm_count >= rpm_lim then
-    return {0, 1, rpm_count, oldest_score(rpm_key), 0}
+    return {0, 1, rpm_count, oldest_score(rpm_key), 0, now}
 end
 
 local tpm_total = 0
+local tpm_oldest = now
 if tpm_lim > 0 then
     redis.call('ZREMRANGEBYSCORE', tpm_key, '-inf', now - window)
     local members = redis.call('ZRANGE', tpm_key, 0, -1)
@@ -60,8 +62,9 @@ if tpm_lim > 0 then
             end
         end
     end
+    tpm_oldest = oldest_score(tpm_key)
     if tpm_total >= tpm_lim then
-        return {0, 2, rpm_count, oldest_score(rpm_key), tpm_total}
+        return {0, 2, rpm_count, oldest_score(rpm_key), tpm_total, tpm_oldest}
     end
 end
 
@@ -70,4 +73,4 @@ if rpm_lim > 0 then
     redis.call('EXPIRE', rpm_key, ttl)
 end
 
-return {1, 0, rpm_count + 1, oldest_score(rpm_key), tpm_total}
+return {1, 0, rpm_count + 1, oldest_score(rpm_key), tpm_total, tpm_oldest}
