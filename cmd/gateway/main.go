@@ -19,6 +19,7 @@ import (
 	"github.com/M4cr0Chen/llm-gateway/internal/auth"
 	"github.com/M4cr0Chen/llm-gateway/internal/config"
 	"github.com/M4cr0Chen/llm-gateway/internal/handler"
+	"github.com/M4cr0Chen/llm-gateway/internal/metrics"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider/anthropic"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider/google"
@@ -146,6 +147,7 @@ func buildMetricsServer(cfg config.MetricsConfig) *http.Server {
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
 	}
 }
 
@@ -219,6 +221,10 @@ func buildProviders(cfg *config.Config) (*provider.Registry, map[string]*provide
 		wrapped := provider.NewHealthTrackingProvider(base, healthCfg, retryCfg)
 		healthProviders[name] = wrapped
 		registry.Register(wrapped, wrapped.Models())
+		// Seed the health gauge so the panel shows the provider before any
+		// traffic flows. The gauge will be overwritten by the first
+		// success/failure observed by the health decorator.
+		metrics.SetProviderHealth(name, true)
 	}
 
 	aliasKeys := make([]string, 0, len(cfg.ModelAliases))

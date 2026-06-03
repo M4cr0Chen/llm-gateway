@@ -175,10 +175,13 @@ func (h *HealthTrackingProvider) recordHealthSuccess(start time.Time) {
 // recordHealthFailure records the failure against the wrapped provider's
 // health state and emits provider-level failure metrics. The status code
 // is taken from the underlying ProviderError when present, otherwise 500.
+// The healthy flag passed to the gauge is the value RecordFailure returns
+// under the health lock, so it reflects this call's effect on health
+// rather than a snapshot read after another goroutine could have run.
 func (h *HealthTrackingProvider) recordHealthFailure(err error, start time.Time) {
-	h.Health.RecordFailure(err)
+	healthy := h.Health.RecordFailure(err)
 	name := h.wrapped.Name()
-	metrics.SetProviderHealth(name, h.Health.HealthyStrict())
+	metrics.SetProviderHealth(name, healthy)
 	status := http.StatusInternalServerError
 	if pe, ok := asProviderError(err); ok && pe.StatusCode > 0 {
 		status = pe.StatusCode

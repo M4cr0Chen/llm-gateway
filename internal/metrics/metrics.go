@@ -67,13 +67,13 @@ var (
 
 	providerRequestDurationSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "gateway_provider_request_duration_seconds",
-		Help:    "Duration of outbound requests to upstream LLM providers, in seconds.",
+		Help:    "End-to-end duration of outbound calls to upstream LLM providers, in seconds. Measured from the first attempt to terminal success or failure, so retry attempts and inter-attempt backoff are included.",
 		Buckets: durationBuckets,
 	}, []string{"provider"})
 
 	rateLimitHitsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "gateway_ratelimit_hits_total",
-		Help: "Rate-limiter decisions: allowed (passed), throttled (429), or failopen (Redis unavailable).",
+		Help: "Rate-limiter decisions across every request that reaches the limiter middleware: allowed (passed; the dominant series in steady state), throttled (returned 429), or failopen (Redis unavailable, request proceeded).",
 	}, []string{"outcome"})
 
 	authFailuresTotal = promauto.NewCounterVec(prometheus.CounterOpts{

@@ -52,13 +52,26 @@ func RequireAPIKey(a auth.Authenticator) func(http.Handler) http.Handler {
 
 // RequireAdminToken returns middleware that gates a route on a static
 // admin token compared in constant time. An empty expected token rejects
-// every request (fail-closed).
+// every request (fail-closed). Failure reasons are split into
+// missing/malformed/unknown for parity with RequireAPIKey so the metric
+// label distribution is comparable.
 func RequireAdminToken(expected string) func(http.Handler) http.Handler {
 	expectedBytes := []byte(expected)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token, ok := bearerToken(r.Header.Get("Authorization"))
-			if !ok || len(expectedBytes) == 0 ||
+			header := r.Header.Get("Authorization")
+			if strings.TrimSpace(header) == "" {
+				metrics.RecordAuthFailure("missing")
+				writeAuthError(w, "Invalid admin token.")
+				return
+			}
+			token, ok := bearerToken(header)
+			if !ok {
+				metrics.RecordAuthFailure("malformed")
+				writeAuthError(w, "Invalid admin token.")
+				return
+			}
+			if len(expectedBytes) == 0 ||
 				subtle.ConstantTimeCompare([]byte(token), expectedBytes) != 1 {
 				metrics.RecordAuthFailure("unknown")
 				writeAuthError(w, "Invalid admin token.")
