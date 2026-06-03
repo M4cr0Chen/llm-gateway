@@ -92,8 +92,13 @@ func main() {
 		close(serverErr)
 	}()
 
-	metricsErr := make(chan error, 1)
+	// metricsErr stays nil when the metrics server is disabled. A receive
+	// on a nil channel blocks forever, so the select case below is
+	// effectively disabled — closing the channel here instead would make
+	// the case fire immediately at startup and the gateway would exit.
+	var metricsErr chan error
 	if metricsServer != nil {
+		metricsErr = make(chan error, 1)
 		go func() {
 			slog.Info("starting metrics server", "addr", metricsServer.Addr)
 			if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -101,8 +106,6 @@ func main() {
 			}
 			close(metricsErr)
 		}()
-	} else {
-		close(metricsErr)
 	}
 
 	exitCode := 0
