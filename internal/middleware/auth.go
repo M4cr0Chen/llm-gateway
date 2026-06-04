@@ -8,6 +8,7 @@ import (
 
 	"github.com/M4cr0Chen/llm-gateway/internal/apierr"
 	"github.com/M4cr0Chen/llm-gateway/internal/auth"
+	"github.com/M4cr0Chen/llm-gateway/internal/metrics"
 )
 
 // RequireAPIKey returns middleware that authenticates Bearer-token API keys
@@ -16,17 +17,28 @@ import (
 func RequireAPIKey(a auth.Authenticator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token, ok := bearerToken(r.Header.Get("Authorization"))
+			header := r.Header.Get("Authorization")
+			if strings.TrimSpace(header) == "" {
+				metrics.RecordAuthFailure("missing")
+				writeAuthError(w, "Missing or malformed Authorization header.")
+				return
+			}
+			token, ok := bearerToken(header)
 			if !ok {
+				metrics.RecordAuthFailure("malformed")
 				writeAuthError(w, "Missing or malformed Authorization header.")
 				return
 			}
 			info, err := a.Authenticate(r.Context(), token)
 			if errors.Is(err, auth.ErrInvalidKey) {
+				metrics.RecordAuthFailure("unknown")
 				writeAuthError(w, "Invalid API key.")
 				return
 			}
 			if err != nil {
+				// Backend unavailable: surfaced as 503, not an auth
+				// failure — deliberately not counted in
+				// gateway_auth_failures_total.
 				LoggerFromContext(r.Context()).Error("auth lookup failed", "err", err)
 				apierr.Write(w, http.StatusServiceUnavailable, "internal_error", "internal_error",
 					"authentication backend unavailable")
@@ -40,14 +52,28 @@ func RequireAPIKey(a auth.Authenticator) func(http.Handler) http.Handler {
 
 // RequireAdminToken returns middleware that gates a route on a static
 // admin token compared in constant time. An empty expected token rejects
-// every request (fail-closed).
+// every request (fail-closed). Failure reasons are split into
+// missing/malformed/unknown for parity with RequireAPIKey so the metric
+// label distribution is comparable.
 func RequireAdminToken(expected string) func(http.Handler) http.Handler {
 	expectedBytes := []byte(expected)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token, ok := bearerToken(r.Header.Get("Authorization"))
-			if !ok || len(expectedBytes) == 0 ||
+			header := r.Header.Get("Authorization")
+			if strings.TrimSpace(header) == "" {
+				metrics.RecordAuthFailure("missing")
+				writeAuthError(w, "Invalid admin token.")
+				return
+			}
+			token, ok := bearerToken(header)
+			if !ok {
+				metrics.RecordAuthFailure("malformed")
+				writeAuthError(w, "Invalid admin token.")
+				return
+			}
+			if len(expectedBytes) == 0 ||
 				subtle.ConstantTimeCompare([]byte(token), expectedBytes) != 1 {
+				metrics.RecordAuthFailure("unknown")
 				writeAuthError(w, "Invalid admin token.")
 				return
 			}

@@ -1,11 +1,83 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: gateway
+      POSTGRES_DB: gateway
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
   gateway:
     build:
       context: ../..
       dockerfile: deployments/docker/Dockerfile
     ports:
       - "8080:8080"
+      - "9090:9090"
     env_file:
       - ../../.env
+    environment:
+      GATEWAY_DATABASE__POSTGRES__DSN: postgres://gateway:gateway@postgres:5432/gateway?sslmode=disable
+      GATEWAY_DATABASE__POSTGRES__AUTO_MIGRATE: "true"
+      GATEWAY_DATABASE__REDIS__DSN: redis://redis:6379
+      GATEWAY_AUTH__ENABLED: "true"
+      GATEWAY_AUTH__ADMIN_TOKEN: dev-admin-token
+      GATEWAY_RATE_LIMIT__ENABLED: "true"
+      GATEWAY_METRICS__ENABLED: "true"
     volumes:
       - ../../configs:/configs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9091:9090"
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom-data:/prometheus
+    depends_on:
+      - gateway
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards-provisioned:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  pg-data:
+  redis-data:
+  prom-data:
+  grafana-data:

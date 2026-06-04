@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/M4cr0Chen/llm-gateway/internal/metrics"
 	"github.com/M4cr0Chen/llm-gateway/internal/model"
 )
 
@@ -51,6 +52,7 @@ func (h *HealthTrackingProvider) Models() []string { return h.wrapped.Models() }
 // ChatCompletion delegates to the wrapped provider with retry logic and
 // records the outcome for health tracking.
 func (h *HealthTrackingProvider) ChatCompletion(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, error) {
+	start := time.Now()
 	var lastErr error
 
 	for attempt := 0; attempt <= h.retry.MaxRetries; attempt++ {
@@ -70,13 +72,13 @@ func (h *HealthTrackingProvider) ChatCompletion(ctx context.Context, req *model.
 
 		resp, err := h.wrapped.ChatCompletion(ctx, req)
 		if err == nil {
-			h.Health.RecordSuccess()
+			h.recordHealthSuccess(start)
 			return resp, nil
 		}
 
 		lastErr = err
 		if !isRetryable(err) {
-			h.Health.RecordFailure(err)
+			h.recordHealthFailure(err, start)
 			return nil, err
 		}
 
@@ -85,7 +87,7 @@ func (h *HealthTrackingProvider) ChatCompletion(ctx context.Context, req *model.
 		}
 	}
 
-	h.Health.RecordFailure(lastErr)
+	h.recordHealthFailure(lastErr, start)
 	return nil, lastErr
 }
 
@@ -93,6 +95,7 @@ func (h *HealthTrackingProvider) ChatCompletion(ctx context.Context, req *model.
 // Retries only occur before the first byte is sent (i.e., if the initial
 // call to the wrapped provider returns an error).
 func (h *HealthTrackingProvider) ChatCompletionStream(ctx context.Context, req *model.ChatCompletionRequest) (<-chan StreamEvent, error) {
+	start := time.Now()
 	var lastErr error
 
 	for attempt := 0; attempt <= h.retry.MaxRetries; attempt++ {
@@ -112,12 +115,12 @@ func (h *HealthTrackingProvider) ChatCompletionStream(ctx context.Context, req *
 
 		ch, err := h.wrapped.ChatCompletionStream(ctx, req)
 		if err == nil {
-			return h.trackStreamHealth(ctx, ch), nil
+			return h.trackStreamHealth(ctx, ch, start), nil
 		}
 
 		lastErr = err
 		if !isRetryable(err) {
-			h.Health.RecordFailure(err)
+			h.recordHealthFailure(err, start)
 			return nil, err
 		}
 
@@ -126,13 +129,13 @@ func (h *HealthTrackingProvider) ChatCompletionStream(ctx context.Context, req *
 		}
 	}
 
-	h.Health.RecordFailure(lastErr)
+	h.recordHealthFailure(lastErr, start)
 	return nil, lastErr
 }
 
 // trackStreamHealth wraps a stream channel to record success/failure based
 // on whether the stream completes without error.
-func (h *HealthTrackingProvider) trackStreamHealth(ctx context.Context, in <-chan StreamEvent) <-chan StreamEvent {
+func (h *HealthTrackingProvider) trackStreamHealth(ctx context.Context, in <-chan StreamEvent, start time.Time) <-chan StreamEvent {
 	out := make(chan StreamEvent, cap(in))
 	go func() {
 		defer close(out)
@@ -152,12 +155,38 @@ func (h *HealthTrackingProvider) trackStreamHealth(ctx context.Context, in <-cha
 			}
 		}
 		if sawError {
-			h.Health.RecordFailure(lastStreamErr)
+			h.recordHealthFailure(lastStreamErr, start)
 		} else {
-			h.Health.RecordSuccess()
+			h.recordHealthSuccess(start)
 		}
 	}()
 	return out
+}
+
+// recordHealthSuccess marks the wrapped provider healthy and emits the
+// provider-level success metrics (counter + latency histogram).
+func (h *HealthTrackingProvider) recordHealthSuccess(start time.Time) {
+	h.Health.RecordSuccess()
+	name := h.wrapped.Name()
+	metrics.SetProviderHealth(name, true)
+	metrics.RecordProviderRequest(name, http.StatusOK, time.Since(start))
+}
+
+// recordHealthFailure records the failure against the wrapped provider's
+// health state and emits provider-level failure metrics. The status code
+// is taken from the underlying ProviderError when present, otherwise 500.
+// The healthy flag passed to the gauge is the value RecordFailure returns
+// under the health lock, so it reflects this call's effect on health
+// rather than a snapshot read after another goroutine could have run.
+func (h *HealthTrackingProvider) recordHealthFailure(err error, start time.Time) {
+	healthy := h.Health.RecordFailure(err)
+	name := h.wrapped.Name()
+	metrics.SetProviderHealth(name, healthy)
+	status := http.StatusInternalServerError
+	if pe, ok := asProviderError(err); ok && pe.StatusCode > 0 {
+		status = pe.StatusCode
+	}
+	metrics.RecordProviderRequest(name, status, time.Since(start))
 }
 
 // backoffDuration calculates the backoff for the given attempt, respecting

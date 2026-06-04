@@ -11,6 +11,7 @@ import (
 
 	"github.com/M4cr0Chen/llm-gateway/internal/apierr"
 	"github.com/M4cr0Chen/llm-gateway/internal/auth"
+	"github.com/M4cr0Chen/llm-gateway/internal/metrics"
 	"github.com/M4cr0Chen/llm-gateway/internal/model"
 	"github.com/M4cr0Chen/llm-gateway/internal/ratelimit"
 )
@@ -78,6 +79,7 @@ func (s *rateLimitState) serve(next http.Handler, w http.ResponseWriter, r *http
 		// successful check the values would be guesses, and an absent
 		// header is a clearer "limits unavailable right now" signal than
 		// a stale one.
+		metrics.RecordRateLimit("failopen")
 		s.warnFailOpen(r, err)
 		next.ServeHTTP(w, r)
 		return
@@ -86,10 +88,12 @@ func (s *rateLimitState) serve(next http.Handler, w http.ResponseWriter, r *http
 	setRateLimitHeaders(w, res)
 
 	if !res.Allowed {
+		metrics.RecordRateLimit("throttled")
 		apierr.WriteRateLimit(w, res.RetryAfter, "")
 		return
 	}
 
+	metrics.RecordRateLimit("allowed")
 	cw := &usageCaptureWriter{ResponseWriter: w}
 	next.ServeHTTP(cw, r)
 	cw.finish(r, s.reserver, *info)

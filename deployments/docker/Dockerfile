@@ -10,5 +10,5 @@ RUN apk --no-cache add ca-certificates
 COPY --from=builder /gateway /gateway
 COPY configs/ /configs/
 ENV GATEWAY_CONFIG_PATH=/configs/gateway.yaml
-EXPOSE 8080
+EXPOSE 8080 9090
 ENTRYPOINT ["/gateway"]

@@ -64,8 +64,11 @@ func (h *ProviderHealth) RecordSuccess() {
 }
 
 // RecordFailure records a failed call. If consecutive failures reach the
-// threshold, the provider is marked unhealthy.
-func (h *ProviderHealth) RecordFailure(err error) {
+// threshold, the provider is marked unhealthy. Returns the strict healthy
+// flag (the same value HealthyStrict would return) read under the same
+// lock, so callers updating an external gauge avoid a read-after-release
+// race against a concurrent RecordSuccess.
+func (h *ProviderHealth) RecordFailure(err error) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -77,6 +80,7 @@ func (h *ProviderHealth) RecordFailure(err error) {
 	if h.consecutiveFails >= h.failureThreshold {
 		h.healthy = false
 	}
+	return h.healthy
 }
 
 // IsHealthy returns whether the provider is currently considered healthy.
@@ -91,6 +95,16 @@ func (h *ProviderHealth) IsHealthy() bool {
 	}
 	// Allow retry after cooldown period.
 	return h.now().Sub(h.lastFailure) >= h.cooldownPeriod
+}
+
+// HealthyStrict returns the underlying healthy flag without the
+// cooldown-permissive smoothing applied by IsHealthy/Status. The metrics
+// gauge uses this so it reflects threshold-tipped state rather than the
+// permissive cooldown view.
+func (h *ProviderHealth) HealthyStrict() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.healthy
 }
 
 // Status returns a point-in-time snapshot of the provider's health.

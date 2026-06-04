@@ -87,6 +87,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.RateLimit.DefaultTPM == 0 {
 		cfg.RateLimit.DefaultTPM = 100000
 	}
+	if cfg.Metrics.Port == 0 {
+		cfg.Metrics.Port = 9090
+	}
 	for name, p := range cfg.Providers {
 		if p.Timeout == 0 {
 			p.Timeout = 30 * time.Second
