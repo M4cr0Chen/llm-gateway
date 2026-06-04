@@ -28,6 +28,7 @@ type Options struct {
 	AdminToken      string                    // empty → admin routes are NOT mounted
 	AdminKeys       *handler.AdminKeysHandler // nil → admin routes are NOT mounted
 	RateLimiter     ratelimit.Reserver        // nil → no rate-limit middleware on /v1/*
+	DebugBodies     bool                      // true → mount DebugRequestBodies (request bodies at DEBUG)
 }
 
 // New constructs the HTTP server. Public routes (/health, /v1/*) are
@@ -41,6 +42,13 @@ func New(registry *provider.Registry, opts Options, logger *slog.Logger) *Server
 	r.Use(middleware.Observe())
 	r.Use(chimw.Recoverer)
 	r.Use(middleware.RequestLogger(logger))
+	if opts.DebugBodies {
+		// Mounted after RequestLogger so the body-capture line shares the
+		// request_id child logger; the middleware drops the line itself
+		// when the handler level is above DEBUG, so this is safe to mount
+		// even when the operator forgets to set log.level=debug.
+		r.Use(middleware.DebugRequestBodies(0))
+	}
 
 	chatHandler := handler.NewChatHandler(registry)
 	modelsHandler := handler.NewModelsHandler(registry)

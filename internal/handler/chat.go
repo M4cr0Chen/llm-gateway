@@ -56,6 +56,8 @@ func (h *ChatHandler) HandleChatCompletion(w http.ResponseWriter, r *http.Reques
 		WriteError(w, http.StatusBadRequest, "invalid_request_error", "invalid_model", err.Error())
 		return
 	}
+	middleware.SetModel(r.Context(), req.Model)
+	middleware.SetProvider(r.Context(), p.Name())
 
 	if req.Stream {
 		h.handleStream(w, r, p, &req)
@@ -70,6 +72,8 @@ func (h *ChatHandler) handleNonStream(w http.ResponseWriter, r *http.Request, p 
 		handleProviderError(w, err)
 		return
 	}
+
+	middleware.SetTokens(r.Context(), resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-LLM-Gateway-Provider", p.Name())
