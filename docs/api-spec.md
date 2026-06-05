@@ -10,8 +10,8 @@ The gateway exposes an **OpenAI-compatible API**. Any client that works with the
 | `GET /v1/models` | Implemented | M1 |
 | `GET /health` | Implemented | M1 |
 | `GET /internal/health` | Implemented | M2 |
-| `POST /internal/admin/keys` | Planned | M3 |
-| `DELETE /internal/admin/keys/{id}` | Planned | M3 |
+| `POST /internal/admin/keys` | Implemented | M3 |
+| `DELETE /internal/admin/keys/{id}` | Implemented | M3 |
 | `GET /internal/admin/usage` | Planned | M6 |
 | `GET /internal/admin/cache/stats` | Planned | M5 |
 | `GET /internal/admin/budgets` | Planned | M6 |
@@ -27,7 +27,7 @@ Create a chat completion. Supports both streaming and non-streaming modes.
 
 **Request Headers:**
 ```
-Authorization: Bearer sk-gateway-xxxx    # validated by Auth middleware (planned M3)
+Authorization: Bearer sk-gw-xxxx         # validated by Auth middleware (M3)
 Content-Type: application/json
 X-Cache-Control: no-cache                # optional, bypass semantic cache (planned M5)
 ```
@@ -106,9 +106,9 @@ X-Cache-Lookup-Time: 5ms                  # planned (M5)
 X-Cost-USD: 0.000375                      # planned (M6, token accounting)
 X-Tokens-Input: 20                        # planned (M6)
 X-Tokens-Output: 9                        # planned (M6)
-X-RateLimit-Limit-Requests: 60            # planned (M3, rate limiting)
-X-RateLimit-Remaining-Requests: 42        # planned (M3)
-X-RateLimit-Reset-Requests: 30s           # planned (M3)
+X-RateLimit-Limit-Requests: 60            # implemented (M3, rate limiting)
+X-RateLimit-Remaining-Requests: 42        # implemented (M3)
+X-RateLimit-Reset-Requests: 30s           # implemented (M3)
 X-Budget-Warning: 85% of monthly budget used  # planned (M6)
 ```
 

@@ -45,7 +45,7 @@ LLM Gateway is a reverse proxy that sits between client applications and LLM pro
         │→ Emit Prometheus metrics
 ```
 
-> **Implementation Note (post-M2):** Currently implemented: RequestID middleware, Logging middleware, Chat Handler with Registry resolution (model name + alias), Provider adapters (OpenAI, Anthropic, Google Gemini), per-provider retry with exponential backoff and jitter via `HealthTrackingProvider` decorator, and `GET /internal/health` for per-provider health visibility. Auth, RateLimit, Cache, Router strategies, Token Counter, Budget, and Kafka pipeline are planned for later milestones.
+> **Implementation Note (post-M3):** Currently implemented: RequestID, request-scoped metrics (`Observe`), panic recovery, request logger, API-key auth, Redis-backed rate limiter, optional DEBUG body capture, Chat Handler with Registry resolution (model name + alias), Provider adapters (OpenAI, Anthropic, Google Gemini), per-provider retry with exponential backoff and jitter via `HealthTrackingProvider` decorator, `GET /internal/health`, `POST/DELETE /internal/admin/keys`, and Prometheus `/metrics` on its own port. Cache, Router strategies, Token Counter / Cost, Budget, and Kafka pipeline are planned for later milestones.
 
 ## Component Interaction
 
@@ -85,7 +85,7 @@ LLM Gateway is a reverse proxy that sits between client applications and LLM pro
     └─────────┘   └──────────┘  └──────────┘  └──────────┘
 ```
 
-> **Current (post-M2):** Config, Server, Handler, OpenAI/Anthropic/Google providers, and the `HealthTrackingProvider` decorator (retry + health) are implemented. Router strategies, Auth/RateLimit/Cache middleware, Token Counter, Budget Enforcer, Metrics, and Pipeline are planned.
+> **Current (post-M3):** Config, Server, Handler, OpenAI/Anthropic/Google providers, the `HealthTrackingProvider` decorator, Auth + RateLimit middleware (Redis-backed), and Prometheus Metrics are implemented. Router strategies, Cache middleware, Token Counter, Budget Enforcer, and Kafka Pipeline are planned.
 
 ## Streaming Data Flow
 
@@ -116,16 +116,28 @@ Client ◄──SSE──┐
 The order of middleware matters. Defined in `internal/server/server.go`:
 
 ```
+Global (mounted on all routes):
 1. RequestID      — first, so all subsequent middleware/handlers have a request ID
-2. PanicRecovery  — catch panics, return 500, log stack trace
-3. Logging        — log request start, attach logger to context
-4. Auth           — validate API key, reject 401 if invalid
-5. RateLimit      — check RPM, reject 429 if exceeded
-6. CacheCheck     — check semantic cache, short-circuit on hit
-7. [Handler]      — actual request processing
+2. Observe        — request-scoped Prometheus metrics + per-request mutable fields
+                    (model, provider, token counts) read by the logger and rate limiter
+3. PanicRecovery  — catch panics, return 500, log stack trace
+4. RequestLogger  — log request start/end, attach slog logger to context
+
+Scoped to /v1/* (public API):
+5. RequireAPIKey  — validate API key, inject KeyInfo into context, reject 401 if invalid
+6. RateLimit      — RPM check via Redis sliding window; reject 429 with Retry-After
+7. DebugBodies    — (opt-in via log.debug_bodies) capture request body at DEBUG
+8. CacheCheck     — check semantic cache, short-circuit on hit                  [planned M5]
+9. [Handler]      — chat completions / models
+
+Scoped to /internal/admin/*:
+- RequireAdminToken — separate token-based auth, gated on configured admin token
 ```
 
-> **Current (M1):** Only steps 1–3 are implemented. Steps 4–6 are planned for M3/M5.
+> **Current (post-M3):** Steps 1–7 are implemented. CacheCheck is planned for M5.
+> The Router (M4) sits between the Handler and the Provider Registry — it does not add
+> an HTTP middleware; it replaces the direct `registry.Resolve(model)` call inside
+> `ChatHandler` with a strategy-aware `Router.Route(ctx, req, meta)`.
 
 ## Ports and Endpoints
 
