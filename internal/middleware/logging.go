@@ -13,8 +13,8 @@ import (
 // slog.Logger. It attaches a child logger (with request_id) and an empty
 // *RequestInfo to the request context so downstream code can retrieve the
 // logger via LoggerFromContext and populate request-scoped fields via the
-// setter helpers (SetModel, SetProvider, SetTokens, MarkCached,
-// MarkRateLimited) plus the auth middleware's KeyInfo plumb-through.
+// setter helpers (SetOrgKey, SetModel, SetProvider, SetTokens,
+// MarkRateLimited).
 //
 // After next.ServeHTTP returns, the middleware reads the RequestInfo and
 // emits a single INFO "request completed" line. Zero-value fields are
@@ -78,9 +78,6 @@ func appendRequestInfoAttrs(attrs []slog.Attr, info *RequestInfo) []slog.Attr {
 			slog.Int("completion_tokens", info.CompletionTokens),
 			slog.Int("total_tokens", info.PromptTokens+info.CompletionTokens),
 		)
-	}
-	if info.Cached {
-		attrs = append(attrs, slog.Bool("cached", true))
 	}
 	if info.RateLimited {
 		attrs = append(attrs, slog.Bool("rate_limited", true))

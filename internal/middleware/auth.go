@@ -44,14 +44,12 @@ func RequireAPIKey(a auth.Authenticator) func(http.Handler) http.Handler {
 					"authentication backend unavailable")
 				return
 			}
-			// Mirror the authenticated identity onto the shared RequestInfo
-			// so the outer RequestLogger can include org_id/key_id in the
-			// access line — chi's r.WithContext shadowing means the outer
-			// middleware can't read KeyInfo back from the inner context.
-			if ri := RequestInfoFromContext(r.Context()); ri != nil {
-				ri.OrgID = info.OrgID
-				ri.KeyID = info.KeyID
-			}
+			// Surface the authenticated identity on the shared RequestInfo
+			// so the outer RequestLogger's access log line can include
+			// org_id/key_id — auth.KeyInfo lives on the inner context only
+			// (added via r.WithContext below), so the outer middleware
+			// can't read it back.
+			SetOrgKey(r.Context(), info.OrgID, info.KeyID)
 			ctx := auth.WithKeyInfo(r.Context(), info)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

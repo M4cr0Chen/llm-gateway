@@ -91,17 +91,20 @@ func DebugRequestBodies(limit int) func(http.Handler) http.Handler {
 
 			// Restore r.Body so the handler sees the full payload: every
 			// byte we consumed from the wire (consumed, not logged) plus
-			// whatever remains on the wire when we truncated early.
+			// whatever remains on the wire when we truncated early. The
+			// original Closer is preserved in both branches so the
+			// server's post-handler cleanup still reaches the underlying
+			// reader.
+			var restored io.Reader = bytes.NewReader(consumed)
 			if truncated {
-				r.Body = struct {
-					io.Reader
-					io.Closer
-				}{
-					Reader: io.MultiReader(bytes.NewReader(consumed), r.Body),
-					Closer: r.Body,
-				}
-			} else {
-				r.Body = io.NopCloser(bytes.NewReader(consumed))
+				restored = io.MultiReader(restored, r.Body)
+			}
+			r.Body = struct {
+				io.Reader
+				io.Closer
+			}{
+				Reader: restored,
+				Closer: r.Body,
 			}
 
 			next.ServeHTTP(w, r)

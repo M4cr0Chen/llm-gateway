@@ -42,13 +42,6 @@ func New(registry *provider.Registry, opts Options, logger *slog.Logger) *Server
 	r.Use(middleware.Observe())
 	r.Use(chimw.Recoverer)
 	r.Use(middleware.RequestLogger(logger))
-	if opts.DebugBodies {
-		// Mounted after RequestLogger so the body-capture line shares the
-		// request_id child logger; the middleware drops the line itself
-		// when the handler level is above DEBUG, so this is safe to mount
-		// even when the operator forgets to set log.level=debug.
-		r.Use(middleware.DebugRequestBodies(0))
-	}
 
 	chatHandler := handler.NewChatHandler(registry)
 	modelsHandler := handler.NewModelsHandler(registry)
@@ -65,6 +58,15 @@ func New(registry *provider.Registry, opts Options, logger *slog.Logger) *Server
 		}
 		if opts.RateLimiter != nil {
 			api.Use(middleware.RateLimit(opts.RateLimiter))
+		}
+		if opts.DebugBodies {
+			// Scoped to /v1/* so /health, /metrics, and admin routes
+			// don't generate a "http body" line per request, and placed
+			// after auth/rate-limit so rejected requests' bodies stay
+			// out of the log entirely. The middleware also drops the
+			// line itself when the handler level is above DEBUG, so
+			// this is safe to mount even at log.level=info.
+			api.Use(middleware.DebugRequestBodies(0))
 		}
 		api.Post("/v1/chat/completions", chatHandler.HandleChatCompletion)
 		api.Get("/v1/models", modelsHandler.HandleListModels)

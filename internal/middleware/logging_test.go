@@ -51,19 +51,14 @@ func TestRequestLogger_BaselineFieldsOnly(t *testing.T) {
 	assert.Contains(t, got, "bytes")
 
 	for _, omit := range []string{"org_id", "key_id", "model", "provider",
-		"prompt_tokens", "completion_tokens", "total_tokens", "cached", "rate_limited"} {
+		"prompt_tokens", "completion_tokens", "total_tokens", "rate_limited"} {
 		assert.NotContains(t, got, omit, "field %q must be omitted when zero-valued", omit)
 	}
 }
 
 func TestRequestLogger_EnrichedFieldsFromSetters(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Simulate auth middleware writing org_id/key_id.
-		if ri := RequestInfoFromContext(r.Context()); ri != nil {
-			ri.OrgID = "org-abc"
-			ri.KeyID = "key-xyz"
-		}
-		// Simulate chat handler setters.
+		SetOrgKey(r.Context(), "org-abc", "key-xyz")
 		SetModel(r.Context(), "gpt-4o")
 		SetProvider(r.Context(), "openai")
 		SetTokens(r.Context(), 11, 22)
@@ -90,17 +85,6 @@ func TestRequestLogger_RateLimitedFlag(t *testing.T) {
 	got := runRequest(t, slog.LevelInfo, inner, req)
 
 	assert.Equal(t, true, got["rate_limited"])
-}
-
-func TestRequestLogger_CachedFlag(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		MarkCached(r.Context())
-		w.WriteHeader(http.StatusOK)
-	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	got := runRequest(t, slog.LevelInfo, inner, req)
-
-	assert.Equal(t, true, got["cached"])
 }
 
 func TestRequestLogger_TokensOmittedWhenZero(t *testing.T) {

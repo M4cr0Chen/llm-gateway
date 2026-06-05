@@ -43,7 +43,6 @@ type RequestInfo struct {
 	Provider         string
 	PromptTokens     int
 	CompletionTokens int
-	Cached           bool
 	RateLimited      bool
 }
 
@@ -63,6 +62,17 @@ func RequestInfoFromContext(ctx context.Context) *RequestInfo {
 		return ri
 	}
 	return nil
+}
+
+// SetOrgKey records the authenticated organization and API key IDs on
+// the request's RequestInfo. Called from the auth middleware so the
+// outer RequestLogger can include org_id/key_id in the access line.
+// No-op if no RequestInfo is attached.
+func SetOrgKey(ctx context.Context, orgID, keyID string) {
+	if ri := RequestInfoFromContext(ctx); ri != nil {
+		ri.OrgID = orgID
+		ri.KeyID = keyID
+	}
 }
 
 // SetModel records the resolved model name on the request's RequestInfo.
@@ -87,15 +97,6 @@ func SetTokens(ctx context.Context, prompt, completion int) {
 	if ri := RequestInfoFromContext(ctx); ri != nil {
 		ri.PromptTokens = prompt
 		ri.CompletionTokens = completion
-	}
-}
-
-// MarkCached flags the request as served from cache. Reserved for the
-// cache middleware (M5); the setter exists today so call sites can be
-// wired without a follow-up to this package.
-func MarkCached(ctx context.Context) {
-	if ri := RequestInfoFromContext(ctx); ri != nil {
-		ri.Cached = true
 	}
 }
 

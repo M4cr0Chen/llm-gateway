@@ -16,10 +16,10 @@ func TestSetters_NoHolder_DoNotPanic(t *testing.T) {
 	// All setters should be silent no-ops when no RequestInfo is attached
 	// (e.g., admin routes that don't run under RequestLogger).
 	assert.NotPanics(t, func() {
+		SetOrgKey(ctx, "org-1", "key-1")
 		SetModel(ctx, "gpt-4o")
 		SetProvider(ctx, "openai")
 		SetTokens(ctx, 10, 20)
-		MarkCached(ctx)
 		MarkRateLimited(ctx)
 	})
 }
@@ -28,17 +28,18 @@ func TestSetters_MutateAttachedHolder(t *testing.T) {
 	info := &RequestInfo{}
 	ctx := WithRequestInfo(context.Background(), info)
 
+	SetOrgKey(ctx, "org-1", "key-1")
 	SetModel(ctx, "gpt-4o")
 	SetProvider(ctx, "openai")
 	SetTokens(ctx, 12, 34)
-	MarkCached(ctx)
 	MarkRateLimited(ctx)
 
+	assert.Equal(t, "org-1", info.OrgID)
+	assert.Equal(t, "key-1", info.KeyID)
 	assert.Equal(t, "gpt-4o", info.Model)
 	assert.Equal(t, "openai", info.Provider)
 	assert.Equal(t, 12, info.PromptTokens)
 	assert.Equal(t, 34, info.CompletionTokens)
-	assert.True(t, info.Cached)
 	assert.True(t, info.RateLimited)
 }
 
