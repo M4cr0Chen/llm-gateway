@@ -21,8 +21,9 @@ cp .env.example .env
 make compose-up
 ```
 
-Five containers should report healthy within ~10 seconds. The gateway
-runs database migrations automatically on first boot.
+Five containers come up within ~10 seconds; Postgres and Redis report
+healthy (the others have no healthcheck and just show as running). The
+gateway runs database migrations automatically on first boot.
 
 ### Smoke test
 
@@ -31,21 +32,25 @@ runs database migrations automatically on first boot.
 curl -s localhost:8080/health
 # → {"status":"ok"}
 
-# 2. Seed an organization, then mint an API key for it. The admin token
-#    is preset to "dev-admin-token" in deployments/docker/docker-compose.yml.
+# 2. Seed an organization, then mint an API key for it. organizations.id
+#    is a UUID, so we use a fixed one here for copy-paste idempotency.
+#    The admin token is preset to "dev-admin-token" in
+#    deployments/docker/docker-compose.yml.
+ORG_ID=00000000-0000-0000-0000-000000000001
 docker compose -f deployments/docker/docker-compose.yml exec postgres \
   psql -U gateway -d gateway -c \
-  "INSERT INTO organizations (id, name) VALUES ('org-dev', 'dev') ON CONFLICT DO NOTHING;"
+  "INSERT INTO organizations (id, name) VALUES ('$ORG_ID', 'dev') ON CONFLICT DO NOTHING;"
 
 curl -s -X POST localhost:8080/internal/admin/keys \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/json" \
-  -d '{"org_id":"org-dev","name":"smoke"}'
-# → {"id":"key-…","plaintext":"sk-…","org_id":"org-dev",…}
+  -d "{\"org_id\":\"$ORG_ID\",\"name\":\"smoke\"}"
+# → {"id":"…","key":"sk-gw-…","key_prefix":"sk-gw-…","name":"smoke",…}
+# The "key" field is the plaintext key — shown ONCE here, store it now.
 
 # 3. Issue a chat completion with the minted key.
 curl -s -X POST localhost:8080/v1/chat/completions \
-  -H "Authorization: Bearer <plaintext-from-step-2>" \
+  -H "Authorization: Bearer <key-from-step-2>" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}'
 ```
