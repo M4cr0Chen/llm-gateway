@@ -168,10 +168,11 @@ make run             # Build and run locally
 make test            # Run all tests
 make lint            # Run golangci-lint
 make docker-build    # Build Docker image
-docker compose up    # Start full local stack (gateway + PG + Redis + Prometheus + Grafana)
-docker compose down  # Stop all services
-make migrate-up      # Run database migrations
-make migrate-down    # Rollback last migration
+make compose-up      # Start full local stack (gateway + PG + Redis + Prometheus + Grafana)
+make compose-down    # Stop all services (drops volumes; use `docker compose down` to preserve state)
+make migrate-create NAME=foo  # Scaffold a new migration (requires migrate CLI)
+make migrate-up      # Apply pending migrations against $GATEWAY_DATABASE__POSTGRES__DSN
+make migrate-down    # Roll back the last migration
 make load-test       # Run load tests (k6)
 ```
 
@@ -201,8 +202,8 @@ Side Notes on Development:
 - [x] Milestone 0: Documentation Bootstrap
 - [x] Milestone 1: Transparent Proxy (Foundation)
 - [x] Milestone 2: Multi-Provider Support
-- [ ] Milestone 3: Auth, Rate Limiting & Observability ← CURRENT
-- [ ] Milestone 4: Smart Router with Fallback & A/B Routing
+- [x] Milestone 3: Auth, Rate Limiting & Observability
+- [ ] Milestone 4: Smart Router with Fallback & A/B Routing ← CURRENT
 - [ ] Milestone 5: Semantic Cache
 - [ ] Milestone 6: Token Accounting & Budget Enforcement
 - [ ] Milestone 7: Async Pipeline (Kafka)
