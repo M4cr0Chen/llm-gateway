@@ -89,6 +89,7 @@ func (s *rateLimitState) serve(next http.Handler, w http.ResponseWriter, r *http
 
 	if !res.Allowed {
 		metrics.RecordRateLimit("throttled")
+		MarkRateLimited(r.Context())
 		apierr.WriteRateLimit(w, res.RetryAfter, "")
 		return
 	}

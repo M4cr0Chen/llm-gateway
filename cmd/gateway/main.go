@@ -65,6 +65,7 @@ func main() {
 		AdminToken:      cfg.Auth.AdminToken,
 		AdminKeys:       adminKeys,
 		RateLimiter:     limiter,
+		DebugBodies:     cfg.Log.DebugBodies,
 	}, slog.Default())
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)

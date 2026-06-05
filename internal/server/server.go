@@ -28,6 +28,7 @@ type Options struct {
 	AdminToken      string                    // empty → admin routes are NOT mounted
 	AdminKeys       *handler.AdminKeysHandler // nil → admin routes are NOT mounted
 	RateLimiter     ratelimit.Reserver        // nil → no rate-limit middleware on /v1/*
+	DebugBodies     bool                      // true → mount DebugRequestBodies (request bodies at DEBUG)
 }
 
 // New constructs the HTTP server. Public routes (/health, /v1/*) are
@@ -57,6 +58,15 @@ func New(registry *provider.Registry, opts Options, logger *slog.Logger) *Server
 		}
 		if opts.RateLimiter != nil {
 			api.Use(middleware.RateLimit(opts.RateLimiter))
+		}
+		if opts.DebugBodies {
+			// Scoped to /v1/* so /health, /metrics, and admin routes
+			// don't generate a "http body" line per request, and placed
+			// after auth/rate-limit so rejected requests' bodies stay
+			// out of the log entirely. The middleware also drops the
+			// line itself when the handler level is above DEBUG, so
+			// this is safe to mount even at log.level=info.
+			api.Use(middleware.DebugRequestBodies(0))
 		}
 		api.Post("/v1/chat/completions", chatHandler.HandleChatCompletion)
 		api.Get("/v1/models", modelsHandler.HandleListModels)
