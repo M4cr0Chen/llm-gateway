@@ -42,7 +42,7 @@ Clients (internal services, web apps)
 | Cache / Rate Limit | Redis 7 | Sliding window counters, cached embeddings |
 | Message Queue | Kafka | segmentio/kafka-go (pure Go, no CGo) |
 | Analytics DB | ClickHouse | Time-series aggregation for usage dashboards |
-| Monitoring | Prometheus + Grafana | Metrics on port 9090 |
+| Monitoring | Prometheus + Grafana | Gateway `/metrics` on `:9090`; in the compose stack Prometheus UI is on host `:9091`, Grafana on `:3000` |
 | Logging | slog (stdlib) | JSON structured logging |
 | DB Migration | golang-migrate | SQL migrations in migrations/ |
 | HTTP Client | net/http | No SDK — direct control over streaming, timeouts, cancellation |
