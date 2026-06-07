@@ -51,7 +51,8 @@ func TestRequestLogger_BaselineFieldsOnly(t *testing.T) {
 	assert.Contains(t, got, "bytes")
 
 	for _, omit := range []string{"org_id", "key_id", "model", "provider",
-		"prompt_tokens", "completion_tokens", "total_tokens", "rate_limited"} {
+		"strategy", "group", "prompt_tokens", "completion_tokens",
+		"total_tokens", "rate_limited"} {
 		assert.NotContains(t, got, omit, "field %q must be omitted when zero-valued", omit)
 	}
 }
@@ -61,6 +62,8 @@ func TestRequestLogger_EnrichedFieldsFromSetters(t *testing.T) {
 		SetOrgKey(r.Context(), "org-abc", "key-xyz")
 		SetModel(r.Context(), "gpt-4o")
 		SetProvider(r.Context(), "openai")
+		SetStrategy(r.Context(), "priority")
+		SetGroup(r.Context(), "smart")
 		SetTokens(r.Context(), 11, 22)
 		w.WriteHeader(http.StatusOK)
 	})
@@ -71,6 +74,8 @@ func TestRequestLogger_EnrichedFieldsFromSetters(t *testing.T) {
 	assert.Equal(t, "key-xyz", got["key_id"])
 	assert.Equal(t, "gpt-4o", got["model"])
 	assert.Equal(t, "openai", got["provider"])
+	assert.Equal(t, "priority", got["strategy"])
+	assert.Equal(t, "smart", got["group"])
 	assert.Equal(t, float64(11), got["prompt_tokens"])
 	assert.Equal(t, float64(22), got["completion_tokens"])
 	assert.Equal(t, float64(33), got["total_tokens"], "total_tokens must be prompt+completion")

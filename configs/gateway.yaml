@@ -66,3 +66,30 @@ rate_limit:
 metrics:
   enabled: true
   port: 9090
+
+routing:
+  # default_strategy is consulted whenever a group does not pin its own.
+  # Valid values: cost_optimized | latency_optimized | round_robin | weighted | priority
+  default_strategy: priority
+  # max_attempts caps the number of distinct provider attempts per request.
+  # Read but not exercised until M4.2 (fallback loop).
+  max_attempts: 3
+  # model_groups expands an incoming "group name" model field into a list
+  # of candidate (provider, model) pairs that the strategy ranks. Leave
+  # empty to disable groups; concrete model names and aliases keep
+  # working via the registry.
+  # Example:
+  #   model_groups:
+  #     fast:
+  #       strategy: cost_optimized   # optional per-group override
+  #       candidates:
+  #         - { provider: openai, model: gpt-4o-mini,      cost_per_1k_input: 0.00015, cost_per_1k_output: 0.0006, priority: 0, weight: 1 }
+  #         - { provider: google, model: gemini-2.0-flash, cost_per_1k_input: 0.0001,  cost_per_1k_output: 0.0004, priority: 1, weight: 1 }
+  model_groups: {}
+  # pricing supplies cost-per-1k figures for concrete-model and alias
+  # requests so cost_optimized has data to rank. Empty = treated as
+  # "no cost data" (cost_optimized falls back to round-robin).
+  # Example:
+  #   pricing:
+  #     gpt-4o: { cost_per_1k_input: 0.0025, cost_per_1k_output: 0.01 }
+  pricing: {}

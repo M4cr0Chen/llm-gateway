@@ -80,6 +80,18 @@ func (r *Registry) listModelsLocked() []string {
 	return names
 }
 
+// HealthFor returns the *ProviderHealth associated with p when p is a
+// *HealthTrackingProvider. For bare providers (tests, future provider
+// types that opt out of decoration) it returns nil, which callers treat
+// as "always healthy" — so the router does not accidentally filter out
+// providers that were never wired through the decorator.
+func HealthFor(p Provider) *ProviderHealth {
+	if htp, ok := p.(*HealthTrackingProvider); ok {
+		return htp.Health
+	}
+	return nil
+}
+
 // ModelInfo pairs a model name with its provider name.
 type ModelInfo struct {
 	ModelName    string

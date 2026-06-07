@@ -41,6 +41,8 @@ type RequestInfo struct {
 	KeyID            string
 	Model            string
 	Provider         string
+	Strategy         string
+	Group            string
 	PromptTokens     int
 	CompletionTokens int
 	RateLimited      bool
@@ -97,6 +99,22 @@ func SetTokens(ctx context.Context, prompt, completion int) {
 	if ri := RequestInfoFromContext(ctx); ri != nil {
 		ri.PromptTokens = prompt
 		ri.CompletionTokens = completion
+	}
+}
+
+// SetStrategy records the routing strategy that picked the provider for
+// this request. No-op if no RequestInfo is attached.
+func SetStrategy(ctx context.Context, strategy string) {
+	if ri := RequestInfoFromContext(ctx); ri != nil {
+		ri.Strategy = strategy
+	}
+}
+
+// SetGroup records the model-group name (empty for concrete or alias
+// requests) on the RequestInfo. No-op if no RequestInfo is attached.
+func SetGroup(ctx context.Context, group string) {
+	if ri := RequestInfoFromContext(ctx); ri != nil {
+		ri.Group = group
 	}
 }
 

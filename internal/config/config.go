@@ -13,6 +13,7 @@ type Config struct {
 	Auth         AuthConfig                `koanf:"auth"`
 	RateLimit    RateLimitConfig           `koanf:"rate_limit"`
 	Metrics      MetricsConfig             `koanf:"metrics"`
+	Routing      RoutingConfig             `koanf:"routing"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -93,4 +94,44 @@ type RateLimitConfig struct {
 type MetricsConfig struct {
 	Enabled bool `koanf:"enabled"`
 	Port    int  `koanf:"port"`
+}
+
+// RoutingConfig holds the router's strategy defaults and the model-group
+// definitions used for candidate fan-out. Experiment and per-org
+// override fields are intentionally absent — those land in M4.3 and M6
+// respectively.
+type RoutingConfig struct {
+	DefaultStrategy string                      `koanf:"default_strategy"`
+	MaxAttempts     int                         `koanf:"max_attempts"`
+	ModelGroups     map[string]ModelGroupConfig `koanf:"model_groups"`
+	Pricing         map[string]CandidatePricing `koanf:"pricing"`
+}
+
+// ModelGroupConfig describes one named model group: an ordered list of
+// candidate providers plus an optional per-group strategy override that
+// supersedes RoutingConfig.DefaultStrategy when set.
+type ModelGroupConfig struct {
+	Strategy   string            `koanf:"strategy"`
+	Candidates []CandidateConfig `koanf:"candidates"`
+}
+
+// CandidateConfig is one (provider, model) entry inside a model group.
+// Cost figures are USD per 1k tokens; Priority lower = preferred;
+// Weight is used only by the weighted strategy.
+type CandidateConfig struct {
+	Provider           string  `koanf:"provider"`
+	Model              string  `koanf:"model"`
+	CostPer1kInputUSD  float64 `koanf:"cost_per_1k_input"`
+	CostPer1kOutputUSD float64 `koanf:"cost_per_1k_output"`
+	Priority           int     `koanf:"priority"`
+	Weight             int     `koanf:"weight"`
+}
+
+// CandidatePricing supplies cost-per-1k figures for concrete model and
+// alias requests (the one-element candidate path). When the requested
+// model is not in this map the candidate is built with zero costs and
+// CostOptimized treats it as "no cost data".
+type CandidatePricing struct {
+	CostPer1kInputUSD  float64 `koanf:"cost_per_1k_input"`
+	CostPer1kOutputUSD float64 `koanf:"cost_per_1k_output"`
 }

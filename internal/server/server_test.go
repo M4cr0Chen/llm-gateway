@@ -15,9 +15,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/M4cr0Chen/llm-gateway/internal/auth"
+	"github.com/M4cr0Chen/llm-gateway/internal/config"
 	"github.com/M4cr0Chen/llm-gateway/internal/handler"
 	"github.com/M4cr0Chen/llm-gateway/internal/model"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider"
+	"github.com/M4cr0Chen/llm-gateway/internal/router"
+	"github.com/M4cr0Chen/llm-gateway/internal/router/strategy"
 	"github.com/M4cr0Chen/llm-gateway/internal/server"
 	"github.com/M4cr0Chen/llm-gateway/internal/store"
 )
@@ -55,15 +58,23 @@ func newRegistry() *provider.Registry {
 	return reg
 }
 
-func newTestServer() *server.Server {
+func newRouter(t *testing.T, reg *provider.Registry) router.Router {
+	t.Helper()
+	rtr, err := router.NewRouter(reg, config.RoutingConfig{DefaultStrategy: "priority"}, nil, strategy.Build)
+	require.NoError(t, err)
+	return rtr
+}
+
+func newTestServer(t *testing.T) *server.Server {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	return server.New(newRegistry(), server.Options{}, logger)
+	reg := newRegistry()
+	return server.New(reg, newRouter(t, reg), server.Options{}, logger)
 }
 
 // --- pre-existing routes (unaffected by adding auth) ---
 
 func TestHealth(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	r := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(w, r)
@@ -75,7 +86,7 @@ func TestHealth(t *testing.T) {
 }
 
 func TestModels(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	w := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(w, r)
@@ -96,7 +107,7 @@ func TestModels(t *testing.T) {
 }
 
 func TestChatCompletions(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	body, _ := json.Marshal(model.ChatCompletionRequest{
 		Model:    "test-model",
 		Messages: []model.Message{{Role: "user", Content: "hi"}},
@@ -111,7 +122,7 @@ func TestChatCompletions(t *testing.T) {
 }
 
 func TestRequestIDHeader(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	r := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(w, r)
@@ -148,7 +159,8 @@ func newAuthedServer(t *testing.T) *server.Server {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	fa := &fixedAuth{want: "sk-gw-good", info: &auth.KeyInfo{KeyID: "k", OrgID: "o"}}
 	adm := handler.NewAdminKeysHandler(recordingStore{}, nil)
-	return server.New(newRegistry(), server.Options{
+	reg := newRegistry()
+	return server.New(reg, newRouter(t, reg), server.Options{
 		Authenticator: fa,
 		AdminToken:    "admin-secret",
 		AdminKeys:     adm,
@@ -194,7 +206,7 @@ func TestAdminRoutes_RequireAdminToken(t *testing.T) {
 }
 
 func TestAdminRoutes_NotMounted_When_Disabled(t *testing.T) {
-	srv := newTestServer() // no admin token / handler
+	srv := newTestServer(t) // no admin token / handler
 
 	r := httptest.NewRequest(http.MethodPost, "/internal/admin/keys", strings.NewReader(`{}`))
 	r.Header.Set("Content-Type", "application/json")

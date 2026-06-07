@@ -12,6 +12,7 @@ import (
 	"github.com/M4cr0Chen/llm-gateway/internal/middleware"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider"
 	"github.com/M4cr0Chen/llm-gateway/internal/ratelimit"
+	"github.com/M4cr0Chen/llm-gateway/internal/router"
 )
 
 // Server holds the HTTP handler and its dependencies.
@@ -35,7 +36,11 @@ type Options struct {
 // always mounted; /internal/health is mounted when HealthProviders is
 // supplied; admin routes are mounted only when both AdminToken and
 // AdminKeys are present.
-func New(registry *provider.Registry, opts Options, logger *slog.Logger) *Server {
+//
+// The registry is still required for the /v1/models listing handler;
+// /v1/chat/completions goes through the router instead so it picks up
+// model-group fan-out and strategy ranking.
+func New(registry *provider.Registry, rtr router.Router, opts Options, logger *slog.Logger) *Server {
 	r := chi.NewRouter()
 
 	r.Use(chimw.RequestID)
@@ -43,7 +48,7 @@ func New(registry *provider.Registry, opts Options, logger *slog.Logger) *Server
 	r.Use(chimw.Recoverer)
 	r.Use(middleware.RequestLogger(logger))
 
-	chatHandler := handler.NewChatHandler(registry)
+	chatHandler := handler.NewChatHandler(rtr)
 	modelsHandler := handler.NewModelsHandler(registry)
 
 	r.Get("/health", handler.HandleHealth)

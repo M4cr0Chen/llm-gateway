@@ -6,19 +6,23 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/M4cr0Chen/llm-gateway/internal/auth"
 	"github.com/M4cr0Chen/llm-gateway/internal/middleware"
 	"github.com/M4cr0Chen/llm-gateway/internal/model"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider"
+	"github.com/M4cr0Chen/llm-gateway/internal/router"
 )
 
-// ChatHandler serves the /v1/chat/completions endpoint.
+// ChatHandler serves the /v1/chat/completions endpoint. It owns the
+// strategy-aware router; the registry is no longer threaded in here —
+// resolution happens inside router.Route.
 type ChatHandler struct {
-	registry *provider.Registry
+	router router.Router
 }
 
-// NewChatHandler creates a new ChatHandler.
-func NewChatHandler(registry *provider.Registry) *ChatHandler {
-	return &ChatHandler{registry: registry}
+// NewChatHandler builds a ChatHandler around the given Router.
+func NewChatHandler(r router.Router) *ChatHandler {
+	return &ChatHandler{router: r}
 }
 
 // maxRequestBodySize is the maximum allowed request body size (10 MB).
@@ -51,22 +55,24 @@ func (h *ChatHandler) HandleChatCompletion(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	p, err := h.registry.Resolve(req.Model)
+	p, decision, err := h.router.Route(r.Context(), &req, routerMeta(r))
 	if err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid_request_error", "invalid_model", err.Error())
+		writeRouterError(w, req.Model, err)
 		return
 	}
-	middleware.SetModel(r.Context(), req.Model)
-	middleware.SetProvider(r.Context(), p.Name())
+	middleware.SetModel(r.Context(), decision.Model)
+	middleware.SetProvider(r.Context(), decision.Provider)
+	middleware.SetStrategy(r.Context(), decision.Strategy)
+	middleware.SetGroup(r.Context(), decision.Group)
 
 	if req.Stream {
-		h.handleStream(w, r, p, &req)
+		h.handleStream(w, r, p, &req, decision)
 	} else {
-		h.handleNonStream(w, r, p, &req)
+		h.handleNonStream(w, r, p, &req, decision)
 	}
 }
 
-func (h *ChatHandler) handleNonStream(w http.ResponseWriter, r *http.Request, p provider.Provider, req *model.ChatCompletionRequest) {
+func (h *ChatHandler) handleNonStream(w http.ResponseWriter, r *http.Request, p provider.Provider, req *model.ChatCompletionRequest, decision router.Decision) {
 	resp, err := p.ChatCompletion(r.Context(), req)
 	if err != nil {
 		handleProviderError(w, err)
@@ -76,11 +82,11 @@ func (h *ChatHandler) handleNonStream(w http.ResponseWriter, r *http.Request, p 
 	middleware.SetTokens(r.Context(), resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-LLM-Gateway-Provider", p.Name())
+	setRoutingHeaders(w.Header(), decision)
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, p provider.Provider, req *model.ChatCompletionRequest) {
+func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, p provider.Provider, req *model.ChatCompletionRequest, decision router.Decision) {
 	logger := middleware.LoggerFromContext(r.Context())
 
 	ch, err := p.ChatCompletionStream(r.Context(), req)
@@ -102,7 +108,7 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, p pro
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-LLM-Gateway-Provider", p.Name())
+	setRoutingHeaders(w.Header(), decision)
 
 	for evt := range ch {
 		if evt.Err != nil {
@@ -129,6 +135,50 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, p pro
 	if r.Context().Err() == nil {
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
+	}
+}
+
+// routerMeta builds router.RequestMeta from the per-request middleware
+// state. OrgID/KeyID come from the auth layer; the rest of the struct is
+// reserved for the M4.2 fallback loop (Attempt, TriedNames) and the
+// router itself (Group).
+func routerMeta(r *http.Request) router.RequestMeta {
+	meta := router.RequestMeta{}
+	if info, ok := auth.KeyInfoFromContext(r.Context()); ok {
+		meta.OrgID = info.OrgID
+		meta.KeyID = info.KeyID
+	}
+	return meta
+}
+
+// setRoutingHeaders stamps the X-LLM-Gateway-* headers that describe the
+// routing decision. Group is omitted entirely when empty (concrete or
+// alias request); Attempts is hard-coded to "1" in M4.1 since the
+// fallback loop is deferred.
+func setRoutingHeaders(h http.Header, decision router.Decision) {
+	h.Set("X-LLM-Gateway-Provider", decision.Provider)
+	h.Set("X-LLM-Gateway-Strategy", decision.Strategy)
+	h.Set("X-LLM-Gateway-Attempts", "1")
+	if decision.Group != "" {
+		h.Set("X-LLM-Gateway-Group", decision.Group)
+	}
+}
+
+// writeRouterError maps a router-layer error to the documented HTTP
+// shape. ErrUnknownModel → 400 invalid_model (matches M1 behaviour);
+// ErrNoHealthyProviders → 503 all_providers_down. Anything else is an
+// internal_error — the router does not emit other typed errors today.
+func writeRouterError(w http.ResponseWriter, modelName string, err error) {
+	switch {
+	case errors.Is(err, router.ErrUnknownModel):
+		WriteError(w, http.StatusBadRequest, "invalid_request_error", "invalid_model",
+			fmt.Sprintf("unknown model %q", modelName))
+	case errors.Is(err, router.ErrNoHealthyProviders):
+		WriteError(w, http.StatusServiceUnavailable, "service_unavailable", "all_providers_down",
+			"all candidate providers are unavailable")
+	default:
+		WriteError(w, http.StatusInternalServerError, "internal_error", "internal_error",
+			fmt.Sprintf("routing failed: %v", err))
 	}
 }
 

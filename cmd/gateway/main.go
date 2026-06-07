@@ -25,6 +25,8 @@ import (
 	"github.com/M4cr0Chen/llm-gateway/internal/provider/google"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider/openai"
 	"github.com/M4cr0Chen/llm-gateway/internal/ratelimit"
+	"github.com/M4cr0Chen/llm-gateway/internal/router"
+	"github.com/M4cr0Chen/llm-gateway/internal/router/strategy"
 	"github.com/M4cr0Chen/llm-gateway/internal/server"
 	"github.com/M4cr0Chen/llm-gateway/internal/store"
 )
@@ -59,7 +61,12 @@ func main() {
 		defer limiterCloser()
 	}
 
-	srv := server.New(registry, server.Options{
+	rtr, err := router.NewRouter(registry, cfg.Routing, cfg.Providers, strategy.Build)
+	if err != nil {
+		log.Fatalf("failed to build router: %v", err)
+	}
+
+	srv := server.New(registry, rtr, server.Options{
 		HealthProviders: healthProviders,
 		Authenticator:   authenticator,
 		AdminToken:      cfg.Auth.AdminToken,
