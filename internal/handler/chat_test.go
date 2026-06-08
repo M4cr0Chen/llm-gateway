@@ -9,13 +9,17 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/M4cr0Chen/llm-gateway/internal/config"
 	"github.com/M4cr0Chen/llm-gateway/internal/handler"
 	"github.com/M4cr0Chen/llm-gateway/internal/model"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider"
+	"github.com/M4cr0Chen/llm-gateway/internal/router"
+	"github.com/M4cr0Chen/llm-gateway/internal/router/strategy"
 )
 
 // mockProvider implements provider.Provider for testing.
@@ -54,6 +58,16 @@ func newTestRegistry(p provider.Provider) *provider.Registry {
 	reg := provider.NewRegistry()
 	reg.Register(p, p.Models())
 	return reg
+}
+
+// newTestRouter wraps a registry in a router.Router using the default
+// priority strategy and an empty model_groups map — so concrete model
+// names are the only resolution path the test exercises.
+func newTestRouter(t *testing.T, reg *provider.Registry) router.Router {
+	t.Helper()
+	rtr, err := router.NewRouter(reg, config.RoutingConfig{DefaultStrategy: "priority"}, nil, strategy.Build)
+	require.NoError(t, err)
+	return rtr
 }
 
 func validRequest() model.ChatCompletionRequest {
@@ -99,12 +113,15 @@ func doRequest(t *testing.T, h http.HandlerFunc, req model.ChatCompletionRequest
 
 func TestHandleChatCompletion_NonStreaming(t *testing.T) {
 	mock := &mockProvider{name: "test", models: []string{"test-model"}, resp: sampleResponse()}
-	ch := handler.NewChatHandler(newTestRegistry(mock))
+	ch := handler.NewChatHandler(newTestRouter(t, newTestRegistry(mock)))
 
 	w := doRequest(t, ch.HandleChatCompletion, validRequest())
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "test", w.Header().Get("X-LLM-Gateway-Provider"))
+	assert.Equal(t, "priority", w.Header().Get("X-LLM-Gateway-Strategy"))
+	assert.Equal(t, "1", w.Header().Get("X-LLM-Gateway-Attempts"))
+	assert.Empty(t, w.Header().Get("X-LLM-Gateway-Group"), "concrete model requests omit the group header")
 
 	var resp model.ChatCompletionResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -114,7 +131,7 @@ func TestHandleChatCompletion_NonStreaming(t *testing.T) {
 
 func TestHandleChatCompletion_Streaming(t *testing.T) {
 	mock := &mockProvider{name: "test", models: []string{"test-model"}, chunks: sampleChunks()}
-	ch := handler.NewChatHandler(newTestRegistry(mock))
+	ch := handler.NewChatHandler(newTestRouter(t, newTestRegistry(mock)))
 
 	req := validRequest()
 	req.Stream = true
@@ -123,6 +140,8 @@ func TestHandleChatCompletion_Streaming(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "text/event-stream", w.Header().Get("Content-Type"))
 	assert.Equal(t, "test", w.Header().Get("X-LLM-Gateway-Provider"))
+	assert.Equal(t, "priority", w.Header().Get("X-LLM-Gateway-Strategy"))
+	assert.Equal(t, "1", w.Header().Get("X-LLM-Gateway-Attempts"))
 
 	body := w.Body.String()
 	lines := strings.Split(strings.TrimSpace(body), "\n")
@@ -139,7 +158,7 @@ func TestHandleChatCompletion_Streaming(t *testing.T) {
 
 func TestHandleChatCompletion_InvalidJSON(t *testing.T) {
 	mock := &mockProvider{name: "test", models: []string{"test-model"}}
-	ch := handler.NewChatHandler(newTestRegistry(mock))
+	ch := handler.NewChatHandler(newTestRouter(t, newTestRegistry(mock)))
 
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{invalid"))
 	w := httptest.NewRecorder()
@@ -153,7 +172,7 @@ func TestHandleChatCompletion_InvalidJSON(t *testing.T) {
 
 func TestHandleChatCompletion_MissingModel(t *testing.T) {
 	mock := &mockProvider{name: "test", models: []string{"test-model"}}
-	ch := handler.NewChatHandler(newTestRegistry(mock))
+	ch := handler.NewChatHandler(newTestRouter(t, newTestRegistry(mock)))
 
 	req := model.ChatCompletionRequest{Messages: []model.Message{{Role: "user", Content: "hi"}}}
 	w := doRequest(t, ch.HandleChatCompletion, req)
@@ -166,7 +185,7 @@ func TestHandleChatCompletion_MissingModel(t *testing.T) {
 
 func TestHandleChatCompletion_EmptyMessages(t *testing.T) {
 	mock := &mockProvider{name: "test", models: []string{"test-model"}}
-	ch := handler.NewChatHandler(newTestRegistry(mock))
+	ch := handler.NewChatHandler(newTestRouter(t, newTestRegistry(mock)))
 
 	req := model.ChatCompletionRequest{Model: "test-model"}
 	w := doRequest(t, ch.HandleChatCompletion, req)
@@ -179,7 +198,7 @@ func TestHandleChatCompletion_EmptyMessages(t *testing.T) {
 
 func TestHandleChatCompletion_UnknownModel(t *testing.T) {
 	mock := &mockProvider{name: "test", models: []string{"test-model"}}
-	ch := handler.NewChatHandler(newTestRegistry(mock))
+	ch := handler.NewChatHandler(newTestRouter(t, newTestRegistry(mock)))
 
 	req := model.ChatCompletionRequest{
 		Model:    "nonexistent",
@@ -200,7 +219,7 @@ func TestHandleChatCompletion_ProviderError(t *testing.T) {
 		Message:    "rate limited",
 	}
 	mock := &mockProvider{name: "test", models: []string{"test-model"}, chatErr: provErr}
-	ch := handler.NewChatHandler(newTestRegistry(mock))
+	ch := handler.NewChatHandler(newTestRouter(t, newTestRegistry(mock)))
 
 	w := doRequest(t, ch.HandleChatCompletion, validRequest())
 
@@ -217,7 +236,7 @@ func TestHandleChatCompletion_ProviderError5xx(t *testing.T) {
 		Message:    "internal error",
 	}
 	mock := &mockProvider{name: "test", models: []string{"test-model"}, chatErr: provErr}
-	ch := handler.NewChatHandler(newTestRegistry(mock))
+	ch := handler.NewChatHandler(newTestRouter(t, newTestRegistry(mock)))
 
 	w := doRequest(t, ch.HandleChatCompletion, validRequest())
 
@@ -227,7 +246,7 @@ func TestHandleChatCompletion_ProviderError5xx(t *testing.T) {
 
 func TestHandleChatCompletion_GenericError(t *testing.T) {
 	mock := &mockProvider{name: "test", models: []string{"test-model"}, chatErr: fmt.Errorf("connection refused")}
-	ch := handler.NewChatHandler(newTestRegistry(mock))
+	ch := handler.NewChatHandler(newTestRouter(t, newTestRegistry(mock)))
 
 	w := doRequest(t, ch.HandleChatCompletion, validRequest())
 
@@ -239,7 +258,7 @@ func TestHandleChatCompletion_GenericError(t *testing.T) {
 
 func TestHandleChatCompletion_RequestTooLarge(t *testing.T) {
 	mock := &mockProvider{name: "test", models: []string{"test-model"}}
-	ch := handler.NewChatHandler(newTestRegistry(mock))
+	ch := handler.NewChatHandler(newTestRouter(t, newTestRegistry(mock)))
 
 	// Build a valid-shaped JSON body that exceeds 10MB via a large content field.
 	padding := strings.Repeat("x", 11<<20)
@@ -268,7 +287,7 @@ func TestHandleChatCompletion_StreamMidStreamError(t *testing.T) {
 	errMock := &midStreamErrProvider{chunks: chunks, midErr: fmt.Errorf("connection reset")}
 	reg.Register(errMock, errMock.Models())
 
-	ch := handler.NewChatHandler(reg)
+	ch := handler.NewChatHandler(newTestRouter(t, reg))
 	req := validRequest()
 	req.Stream = true
 	w := doRequest(t, ch.HandleChatCompletion, req)
@@ -278,6 +297,28 @@ func TestHandleChatCompletion_StreamMidStreamError(t *testing.T) {
 	// Should contain the first chunk and then [DONE], not hang
 	assert.Contains(t, body, "data: ")
 	assert.Contains(t, body, "data: [DONE]")
+}
+
+func TestHandleChatCompletion_AllProvidersDown(t *testing.T) {
+	// Wrap the stub in a HealthTrackingProvider whose breaker is tripped
+	// before the request runs — Route must surface ErrNoHealthyProviders
+	// and the handler must translate it to 503 all_providers_down.
+	mock := &mockProvider{name: "test", models: []string{"test-model"}, resp: sampleResponse()}
+	tracked := provider.NewHealthTrackingProvider(mock,
+		provider.HealthConfig{FailureThreshold: 1, CooldownPeriod: time.Hour},
+		provider.RetryConfig{},
+	)
+	tracked.Health.RecordFailure(fmt.Errorf("boom"))
+
+	reg := provider.NewRegistry()
+	reg.Register(tracked, []string{"test-model"})
+	ch := handler.NewChatHandler(newTestRouter(t, reg))
+
+	w := doRequest(t, ch.HandleChatCompletion, validRequest())
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	var apiErr model.APIError
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &apiErr))
+	assert.Equal(t, "all_providers_down", apiErr.Error.Code)
 }
 
 // midStreamErrProvider sends chunks then an error event.

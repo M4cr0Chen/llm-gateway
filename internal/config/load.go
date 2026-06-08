@@ -90,6 +90,12 @@ func applyDefaults(cfg *Config) {
 	if cfg.Metrics.Port == 0 {
 		cfg.Metrics.Port = 9090
 	}
+	if cfg.Routing.DefaultStrategy == "" {
+		cfg.Routing.DefaultStrategy = "priority"
+	}
+	if cfg.Routing.MaxAttempts == 0 {
+		cfg.Routing.MaxAttempts = 3
+	}
 	for name, p := range cfg.Providers {
 		if p.Timeout == 0 {
 			p.Timeout = 30 * time.Second

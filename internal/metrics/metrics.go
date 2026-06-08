@@ -42,6 +42,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	dto "github.com/prometheus/client_model/go"
 )
 
 // durationBuckets are the histogram buckets used for request and provider
@@ -128,6 +129,51 @@ func SetProviderHealth(provider string, healthy bool) {
 		v = 1.0
 	}
 	providerHealth.WithLabelValues(provider).Set(v)
+}
+
+// LatencyTotal is a single provider's cumulative latency summary, derived
+// from the gateway_provider_request_duration_seconds histogram since
+// process start. The router's LatencyOptimized strategy polls these and
+// takes deltas between polls to compute the average latency in the
+// poll window.
+type LatencyTotal struct {
+	Sum   float64
+	Count uint64
+}
+
+// ProviderLatencyTotals returns the cumulative Sum and Count of
+// observations recorded against gateway_provider_request_duration_seconds,
+// keyed by provider label. Providers that have never recorded a sample
+// are absent from the map.
+func ProviderLatencyTotals() map[string]LatencyTotal {
+	ch := make(chan prometheus.Metric, 16)
+	go func() {
+		providerRequestDurationSeconds.Collect(ch)
+		close(ch)
+	}()
+	out := make(map[string]LatencyTotal)
+	for m := range ch {
+		var dtoMetric dto.Metric
+		if err := m.Write(&dtoMetric); err != nil {
+			continue
+		}
+		h := dtoMetric.GetHistogram()
+		if h == nil {
+			continue
+		}
+		var provider string
+		for _, lp := range dtoMetric.GetLabel() {
+			if lp.GetName() == "provider" {
+				provider = lp.GetValue()
+				break
+			}
+		}
+		if provider == "" {
+			continue
+		}
+		out[provider] = LatencyTotal{Sum: h.GetSampleSum(), Count: h.GetSampleCount()}
+	}
+	return out
 }
 
 // statusClass bins an HTTP status code into "2xx", "3xx", "4xx", "5xx",

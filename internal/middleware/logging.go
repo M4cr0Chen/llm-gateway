@@ -72,6 +72,12 @@ func appendRequestInfoAttrs(attrs []slog.Attr, info *RequestInfo) []slog.Attr {
 	if info.Provider != "" {
 		attrs = append(attrs, slog.String("provider", info.Provider))
 	}
+	if info.Strategy != "" {
+		attrs = append(attrs, slog.String("strategy", info.Strategy))
+	}
+	if info.Group != "" {
+		attrs = append(attrs, slog.String("group", info.Group))
+	}
 	if info.PromptTokens > 0 || info.CompletionTokens > 0 {
 		attrs = append(attrs,
 			slog.Int("prompt_tokens", info.PromptTokens),
