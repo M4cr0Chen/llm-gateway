@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/M4cr0Chen/llm-gateway/internal/config"
 	"github.com/M4cr0Chen/llm-gateway/internal/model"
@@ -96,6 +97,9 @@ type defaultRouter struct {
 	pricing         map[string]config.CandidatePricing
 	defaultStrategy Strategy
 	groupStrategies map[string]Strategy // per-group override; nil entry → use default
+
+	skipWarnOnce sync.Map // map[string]*sync.Once — keyed by "provider\x00model"
+	skipWarn     func(providerName, modelName string)
 }
 
 // NewRouter validates the routing config against the registry and builds
@@ -157,6 +161,7 @@ func NewRouter(
 		pricing:         cfg.Pricing,
 		defaultStrategy: defaultStrategy,
 		groupStrategies: groupStrategies,
+		skipWarn:        defaultSkipWarn,
 	}, nil
 }
 

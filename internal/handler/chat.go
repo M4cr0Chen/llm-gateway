@@ -60,6 +60,12 @@ func (h *ChatHandler) HandleChatCompletion(w http.ResponseWriter, r *http.Reques
 		writeRouterError(w, req.Model, err)
 		return
 	}
+	// Rewrite req.Model to the canonical name the upstream provider
+	// expects. The original value may have been a model-group name
+	// ("fast", "smart") or a local alias ("claude") that the provider
+	// API does not recognise. For concrete model requests the rewrite
+	// is a no-op because decision.Model == req.Model.
+	req.Model = decision.Model
 	middleware.SetModel(r.Context(), decision.Model)
 	middleware.SetProvider(r.Context(), decision.Provider)
 	middleware.SetStrategy(r.Context(), decision.Strategy)

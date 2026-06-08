@@ -61,7 +61,7 @@ func main() {
 		defer limiterCloser()
 	}
 
-	rtr, err := router.NewRouter(registry, cfg.Routing, cfg.Providers, strategy.Build)
+	rtr, err := router.NewRouter(registry, cfg.Routing, cfg.Providers, strategy.NewBuilder().Build)
 	if err != nil {
 		log.Fatalf("failed to build router: %v", err)
 	}

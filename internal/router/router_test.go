@@ -64,7 +64,7 @@ func TestRoute_Alias(t *testing.T) {
 	p, dec, err := rtr.Route(context.Background(), req, router.RequestMeta{})
 	require.NoError(t, err)
 	assert.Equal(t, "anthropic", p.Name())
-	assert.Equal(t, "claude", dec.Model, "alias resolves through the registry; the model field retains the alias")
+	assert.Equal(t, "claude-sonnet-4-20250514", dec.Model, "alias resolves to the canonical model name so handler can rewrite req.Model before calling upstream")
 	assert.Equal(t, "", dec.Group)
 }
 

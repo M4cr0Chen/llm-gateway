@@ -7,16 +7,21 @@ import (
 	"sync"
 )
 
-// Registry maps model names to providers.
+// Registry maps model names to providers. Aliases are stored in a
+// second map so callers (the router, chat handler) can recover the
+// canonical model name to send upstream — without it, an alias request
+// would forward the alias verbatim and the provider would return 4xx.
 type Registry struct {
-	mu     sync.RWMutex
-	models map[string]Provider
+	mu      sync.RWMutex
+	models  map[string]Provider
+	aliases map[string]string // alias -> canonical model name
 }
 
 // NewRegistry creates a new empty provider registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		models: make(map[string]Provider),
+		models:  make(map[string]Provider),
+		aliases: make(map[string]string),
 	}
 }
 
@@ -46,7 +51,22 @@ func (r *Registry) RegisterAlias(alias, target string) error {
 		return fmt.Errorf("alias %q targets unregistered model %q", alias, target)
 	}
 	r.models[alias] = p
+	r.aliases[alias] = target
 	return nil
+}
+
+// CanonicalModel returns the canonical (upstream-recognised) model name
+// for name. If name is a registered alias, it returns the alias's
+// target; otherwise it returns name unchanged. Callers that need to
+// forward a request body upstream should pass req.Model through this
+// before sending — the provider APIs reject the alias form.
+func (r *Registry) CanonicalModel(name string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if canonical, ok := r.aliases[name]; ok {
+		return canonical
+	}
+	return name
 }
 
 // Resolve returns the provider registered for the given model name.

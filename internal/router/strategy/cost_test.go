@@ -54,18 +54,19 @@ func TestCostOptimized_AllZeroCostFallsThroughToRoundRobin(t *testing.T) {
 
 	var warnCount atomic.Int64
 	s := NewCostOptimized()
-	s.warn = func(string) { warnCount.Add(1) }
+	s.warn = func(string, []router.Candidate) { warnCount.Add(1) }
 
 	// First pick rolls the round-robin from 0 → index 0.
 	pick1, err := s.Select(candidates, req, router.RequestMeta{Group: "smart"})
 	require.NoError(t, err)
 	assert.Equal(t, "gpt-4o", pick1.Model)
-	// Second pick wraps to index 1, and crucially does NOT re-warn.
+	// Second pick wraps to index 1, and crucially does NOT re-warn —
+	// the (group, model-set) key is unchanged across the two calls.
 	pick2, err := s.Select(candidates, req, router.RequestMeta{Group: "smart"})
 	require.NoError(t, err)
 	assert.Equal(t, "claude", pick2.Model)
 
-	assert.Equal(t, int64(1), warnCount.Load(), "WARN should fire once per group")
+	assert.Equal(t, int64(1), warnCount.Load(), "WARN should fire once per (group, candidate-set)")
 
 	// A different group triggers another WARN.
 	_, _ = s.Select(candidates, req, router.RequestMeta{Group: "fast"})
@@ -98,6 +99,44 @@ func TestCostOptimized_EstimateCostFallsBackToDefaultMaxTokens(t *testing.T) {
 func TestCostOptimized_EmptyCandidates(t *testing.T) {
 	_, err := NewCostOptimized().Select(nil, &model.ChatCompletionRequest{}, router.RequestMeta{})
 	require.Error(t, err)
+}
+
+func TestCostOptimized_ConcreteModelPathWarnsPerDistinctModel(t *testing.T) {
+	// Concrete-model requests arrive with group="" and a one-element
+	// candidate list. Each distinct unpriced model must produce its own
+	// warning — keying solely on group would collapse them all under
+	// the empty key and silence everything after the first.
+	var got []string
+	s := NewCostOptimized()
+	s.warn = func(_ string, cands []router.Candidate) {
+		for _, c := range cands {
+			got = append(got, c.Model)
+		}
+	}
+	req := &model.ChatCompletionRequest{Messages: []model.Message{{Role: "user", Content: "hi"}}}
+
+	// gpt-4o twice → one warning.
+	_, _ = s.Select([]router.Candidate{stubCandidate("openai", "gpt-4o", router.Candidate{})}, req, router.RequestMeta{})
+	_, _ = s.Select([]router.Candidate{stubCandidate("openai", "gpt-4o", router.Candidate{})}, req, router.RequestMeta{})
+	// claude once → second warning.
+	_, _ = s.Select([]router.Candidate{stubCandidate("anthropic", "claude", router.Candidate{})}, req, router.RequestMeta{})
+
+	assert.Equal(t, []string{"gpt-4o", "claude"}, got)
+}
+
+func TestCostOptimized_WarnKeyIsOrderIndependent(t *testing.T) {
+	// Two candidate lists with the same models in different order
+	// must share one warn-once slot — otherwise a reordering in YAML
+	// (or in expandGroup) would double-warn.
+	a := []router.Candidate{
+		stubCandidate("openai", "gpt-4o", router.Candidate{}),
+		stubCandidate("anthropic", "claude", router.Candidate{}),
+	}
+	b := []router.Candidate{
+		stubCandidate("anthropic", "claude", router.Candidate{}),
+		stubCandidate("openai", "gpt-4o", router.Candidate{}),
+	}
+	assert.Equal(t, warnKey("smart", a), warnKey("smart", b))
 }
 
 func TestCostOptimized_Name(t *testing.T) {

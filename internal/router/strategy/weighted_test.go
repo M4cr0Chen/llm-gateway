@@ -54,6 +54,35 @@ func TestWeighted_EmptyCandidates(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestWeighted_NumericalEdgeAtTotal(t *testing.T) {
+	// randFloat=1.0 → pick = 1.0 * total. The forward `pick < cursor`
+	// scan never triggers because cursor reaches `total` exactly at the
+	// final candidate. The reverse-scan fallback must return the last
+	// positive-weight candidate instead of returning the zero Candidate.
+	candidates := []router.Candidate{
+		stubCandidate("openai", "gpt-4o", router.Candidate{Weight: 1}),
+		stubCandidate("anthropic", "claude", router.Candidate{Weight: 2}),
+	}
+	w := newWeightedWithRand(func() float64 { return 1.0 })
+	pick, err := w.Select(candidates, nil, router.RequestMeta{})
+	require.NoError(t, err)
+	assert.Equal(t, "claude", pick.Model, "pick==total falls through to the last positive-weight candidate")
+}
+
+func TestWeighted_NumericalEdgeSkipsTrailingZeroWeights(t *testing.T) {
+	// Same edge, but the last entry has weight 0 — the reverse scan
+	// must skip it and return the last *positive*-weight candidate.
+	candidates := []router.Candidate{
+		stubCandidate("openai", "gpt-4o", router.Candidate{Weight: 1}),
+		stubCandidate("anthropic", "claude", router.Candidate{Weight: 2}),
+		stubCandidate("google", "gemini", router.Candidate{Weight: 0}),
+	}
+	w := newWeightedWithRand(func() float64 { return 1.0 })
+	pick, err := w.Select(candidates, nil, router.RequestMeta{})
+	require.NoError(t, err)
+	assert.Equal(t, "claude", pick.Model)
+}
+
 func TestWeighted_Name(t *testing.T) {
 	assert.Equal(t, "weighted", NewWeighted().Name())
 }

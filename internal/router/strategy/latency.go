@@ -143,13 +143,23 @@ func (s *LatencyOptimized) run(reader func() map[string]metrics.LatencyTotal, po
 			curr := reader()
 			for provider, c := range curr {
 				p := prev[provider]
+				if c.Count < p.Count {
+					// Counter reset (metric re-registration in tests, or
+					// a histogram replacement). uint64 subtraction would
+					// wrap to a huge positive deltaCount and pull the
+					// EWMA toward zero — skip this tick and accept curr
+					// as the new baseline via the prev = curr below.
+					continue
+				}
 				deltaCount := c.Count - p.Count
 				if deltaCount == 0 {
 					continue
 				}
 				deltaSum := c.Sum - p.Sum
 				if deltaSum < 0 {
-					// Counter reset (e.g., metric re-registration in tests). Reset state.
+					// Sum can drift negative even when count grows
+					// monotonically (float accumulation order). Treat as
+					// zero so the average doesn't go negative.
 					deltaSum = 0
 				}
 				s.Observe(provider, deltaSum/float64(deltaCount))

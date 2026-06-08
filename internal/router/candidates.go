@@ -1,6 +1,9 @@
 package router
 
 import (
+	"log/slog"
+	"sync"
+
 	"github.com/M4cr0Chen/llm-gateway/internal/config"
 	"github.com/M4cr0Chen/llm-gateway/internal/provider"
 )
@@ -29,12 +32,16 @@ func (r *defaultRouter) resolveCandidates(modelName string) (string, []Candidate
 		return "", nil, ErrUnknownModel
 	}
 
+	// Use the canonical name for the candidate so the handler can rewrite
+	// req.Model before calling upstream — provider APIs do not recognise
+	// our local alias forms. For non-aliases this is a no-op.
+	canonical := r.registry.CanonicalModel(modelName)
 	c := Candidate{
 		Provider: p,
-		Model:    modelName,
+		Model:    canonical,
 		Weight:   1,
 	}
-	if price, ok := r.pricing[modelName]; ok {
+	if price, ok := r.pricing[canonical]; ok {
 		c.CostPer1kInputUSD = price.CostPer1kInputUSD
 		c.CostPer1kOutputUSD = price.CostPer1kOutputUSD
 	}
@@ -44,15 +51,16 @@ func (r *defaultRouter) resolveCandidates(modelName string) (string, []Candidate
 // expandGroup turns a model_groups entry into a candidate list, in the
 // order written in YAML so Priority's tie-break (config order) stays
 // stable. Candidates whose Model cannot be resolved by the registry are
-// silently skipped — that case only happens when a provider was
-// configured but later had its API key blanked, since startup
-// validation rejected groups whose Provider field is not in
-// cfg.Providers.
+// skipped with a one-shot WARN per (provider, model) pair — that case
+// usually means a provider was configured in YAML but its API key was
+// blanked at startup, so without the warning the request would surface
+// as a misleading 503 all_providers_down.
 func (r *defaultRouter) expandGroup(g config.ModelGroupConfig) []Candidate {
 	out := make([]Candidate, 0, len(g.Candidates))
 	for _, c := range g.Candidates {
 		p, err := r.registry.Resolve(c.Model)
 		if err != nil {
+			r.warnSkipOnce(c.Provider, c.Model)
 			continue
 		}
 		out = append(out, Candidate{
@@ -65,6 +73,31 @@ func (r *defaultRouter) expandGroup(g config.ModelGroupConfig) []Candidate {
 		})
 	}
 	return out
+}
+
+// warnSkipOnce emits exactly one WARN for a given (provider, model)
+// pair across the process lifetime. The skip path is observability-only
+// — we don't want a hot request to spam logs once an operator has seen
+// the issue, but the first occurrence has to be visible.
+func (r *defaultRouter) warnSkipOnce(providerName, modelName string) {
+	key := providerName + "\x00" + modelName
+	v, ok := r.skipWarnOnce.Load(key)
+	if !ok {
+		v, _ = r.skipWarnOnce.LoadOrStore(key, &sync.Once{})
+	}
+	v.(*sync.Once).Do(func() {
+		r.skipWarn(providerName, modelName)
+	})
+}
+
+// defaultSkipWarn is the production WARN sink for warnSkipOnce. Tests
+// swap it via the unexported skipWarn field to capture the calls
+// without scraping slog output.
+func defaultSkipWarn(providerName, modelName string) {
+	slog.Warn("router: group candidate skipped — model not registered (provider unconfigured or API key missing?)",
+		"provider", providerName,
+		"model", modelName,
+	)
 }
 
 // filterHealthy drops candidates whose provider's circuit breaker is

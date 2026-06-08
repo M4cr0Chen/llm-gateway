@@ -11,17 +11,64 @@ package strategy
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/M4cr0Chen/llm-gateway/internal/router"
 )
 
-// Build returns the strategy identified by name. The five known names
-// are kept in one switch so an "unknown routing strategy" error fires
-// from both the default_strategy and per-group override paths.
+// Builder memoizes strategy instances by name so multiple groups that
+// pick the same strategy share one instance per Builder. This matters
+// most for LatencyOptimized: each instance starts a background poller
+// and maintains its own EWMA map populated from the same Prometheus
+// metrics. Without memoization, a process with N groups overriding to
+// "latency_optimized" leaks N goroutines for state that should be one.
 //
-// LatencyOptimized starts a background poller for the EWMA values; for
-// tests that need to control timing or bypass the goroutine, use
-// NewLatencyOptimizedWithReader directly.
+// Sharing is also correct for the other four strategies — RoundRobin
+// keys its counters by meta.Group, CostOptimized's warn-once is keyed
+// by (group, candidate-set), Weighted has only an RNG, and Priority is
+// stateless — so the same instance is safe to use as the default
+// strategy AND as a per-group override.
+//
+// Production wires one Builder in main.go and passes Builder.Build into
+// router.NewRouter. Tests that need isolation construct a fresh
+// Builder, or call the free Build directly to get a brand-new
+// instance.
+type Builder struct {
+	mu sync.Mutex
+	by map[string]router.Strategy
+}
+
+// NewBuilder returns an empty Builder.
+func NewBuilder() *Builder {
+	return &Builder{by: make(map[string]router.Strategy)}
+}
+
+// Build returns the memoized strategy for name, constructing it on
+// first use. Subsequent calls for the same name return the same
+// instance.
+func (b *Builder) Build(name string) (router.Strategy, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if s, ok := b.by[name]; ok {
+		return s, nil
+	}
+	s, err := Build(name)
+	if err != nil {
+		return nil, err
+	}
+	b.by[name] = s
+	return s, nil
+}
+
+// Build returns a freshly-constructed strategy identified by name. The
+// five known names are kept in one switch so an "unknown routing
+// strategy" error fires from both the default_strategy and per-group
+// override paths.
+//
+// Each call returns a NEW instance — use *Builder.Build for production
+// memoization where multiple groups share one strategy. LatencyOptimized
+// in particular starts a background poller; callers responsible for
+// long-lived ownership should arrange to call Stop.
 func Build(name string) (router.Strategy, error) {
 	switch name {
 	case "cost_optimized":
