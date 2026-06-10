@@ -51,10 +51,40 @@ func TestRequestLogger_BaselineFieldsOnly(t *testing.T) {
 	assert.Contains(t, got, "bytes")
 
 	for _, omit := range []string{"org_id", "key_id", "model", "provider",
-		"strategy", "group", "prompt_tokens", "completion_tokens",
+		"strategy", "group", "attempts", "prompt_tokens", "completion_tokens",
 		"total_tokens", "rate_limited"} {
 		assert.NotContains(t, got, omit, "field %q must be omitted when zero-valued", omit)
 	}
+}
+
+func TestRequestLogger_AttemptsOmittedWhenSingleAttempt(t *testing.T) {
+	// Steady-state first-try success: SetAttempts(1) must not surface
+	// the attempts field, keeping the access line short.
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		SetModel(r.Context(), "gpt-4o")
+		SetProvider(r.Context(), "openai")
+		SetAttempts(r.Context(), 1)
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	got := runRequest(t, slog.LevelInfo, inner, req)
+
+	assert.NotContains(t, got, "attempts", "first-try success must not emit attempts")
+}
+
+func TestRequestLogger_AttemptsEmittedOnFallback(t *testing.T) {
+	// Fallback path: SetAttempts(N>1) must surface so dashboards can
+	// alert on routing churn.
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		SetModel(r.Context(), "gpt-4o")
+		SetProvider(r.Context(), "anthropic")
+		SetAttempts(r.Context(), 2)
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	got := runRequest(t, slog.LevelInfo, inner, req)
+
+	assert.Equal(t, float64(2), got["attempts"])
 }
 
 func TestRequestLogger_EnrichedFieldsFromSetters(t *testing.T) {

@@ -43,6 +43,7 @@ type RequestInfo struct {
 	Provider         string
 	Strategy         string
 	Group            string
+	Attempts         int
 	PromptTokens     int
 	CompletionTokens int
 	RateLimited      bool
@@ -115,6 +116,17 @@ func SetStrategy(ctx context.Context, strategy string) {
 func SetGroup(ctx context.Context, group string) {
 	if ri := RequestInfoFromContext(ctx); ri != nil {
 		ri.Group = group
+	}
+}
+
+// SetAttempts records how many distinct provider attempts the Router
+// made for this request (1 on first-try success; N when an N-th
+// fallback finally succeeded; equals attempts made on terminal
+// failure). The access logger only emits this field when > 1 to keep
+// the steady-state line short. No-op if no RequestInfo is attached.
+func SetAttempts(ctx context.Context, attempts int) {
+	if ri := RequestInfoFromContext(ctx); ri != nil {
+		ri.Attempts = attempts
 	}
 }
 

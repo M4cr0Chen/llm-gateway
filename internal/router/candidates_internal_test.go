@@ -14,18 +14,22 @@ import (
 	"github.com/M4cr0Chen/llm-gateway/internal/provider"
 )
 
-// stub is a no-op Provider for internal tests. We re-declare it here
-// instead of reusing helpers_test.go because that file is in the
-// router_test package and is not visible from package router.
+// stub is a quiet-success Provider for internal tests — same intent as
+// helpers_test.go's stubProvider, re-declared here because that file
+// lives in the router_test package and isn't visible from package
+// router. ChatCompletion returns an empty response so the M4.2 Route
+// loop completes the call cleanly.
 type stub struct{ name string }
 
 func (s stub) Name() string    { return s.name }
 func (s stub) Models() []string { return nil }
 func (s stub) ChatCompletion(context.Context, *model.ChatCompletionRequest) (*model.ChatCompletionResponse, error) {
-	return nil, errors.New("not implemented")
+	return &model.ChatCompletionResponse{}, nil
 }
 func (s stub) ChatCompletionStream(context.Context, *model.ChatCompletionRequest) (<-chan provider.StreamEvent, error) {
-	return nil, errors.New("not implemented")
+	ch := make(chan provider.StreamEvent)
+	close(ch)
+	return ch, nil
 }
 
 type recordingStrategy struct{ pick int }

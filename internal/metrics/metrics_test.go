@@ -88,6 +88,53 @@ func TestSetProviderHealth(t *testing.T) {
 	assert.Equal(t, 1.0, testutil.ToFloat64(providerHealth.WithLabelValues(provider)))
 }
 
+func TestRecordRouterDecision(t *testing.T) {
+	const strategy, providerName, group = "priority", "test-provider-RecordRouterDecision", "smart"
+
+	beforePrimary := testutil.ToFloat64(routerDecisionsTotal.WithLabelValues(strategy, providerName, group, "primary"))
+	beforeFallback := testutil.ToFloat64(routerDecisionsTotal.WithLabelValues(strategy, providerName, group, "fallback"))
+	beforeError := testutil.ToFloat64(routerDecisionsTotal.WithLabelValues(strategy, providerName, group, "error"))
+
+	RecordRouterDecision(strategy, providerName, group, "primary")
+	RecordRouterDecision(strategy, providerName, group, "fallback")
+	RecordRouterDecision(strategy, providerName, group, "fallback")
+	RecordRouterDecision(strategy, providerName, group, "error")
+
+	assert.Equal(t, beforePrimary+1, testutil.ToFloat64(routerDecisionsTotal.WithLabelValues(strategy, providerName, group, "primary")))
+	assert.Equal(t, beforeFallback+2, testutil.ToFloat64(routerDecisionsTotal.WithLabelValues(strategy, providerName, group, "fallback")))
+	assert.Equal(t, beforeError+1, testutil.ToFloat64(routerDecisionsTotal.WithLabelValues(strategy, providerName, group, "error")))
+}
+
+func TestRecordRouterFallback(t *testing.T) {
+	const from, to = "test-provider-RecordRouterFallback-from", "test-provider-RecordRouterFallback-to"
+
+	before5xx := testutil.ToFloat64(routerFallbackTotal.WithLabelValues(from, to, "5xx"))
+	before429 := testutil.ToFloat64(routerFallbackTotal.WithLabelValues(from, to, "429"))
+	beforeNetwork := testutil.ToFloat64(routerFallbackTotal.WithLabelValues(from, "", "network"))
+
+	RecordRouterFallback(from, to, "5xx")
+	RecordRouterFallback(from, to, "429")
+	RecordRouterFallback(from, "", "network")
+
+	assert.Equal(t, before5xx+1, testutil.ToFloat64(routerFallbackTotal.WithLabelValues(from, to, "5xx")))
+	assert.Equal(t, before429+1, testutil.ToFloat64(routerFallbackTotal.WithLabelValues(from, to, "429")))
+	assert.Equal(t, beforeNetwork+1, testutil.ToFloat64(routerFallbackTotal.WithLabelValues(from, "", "network")))
+}
+
+func TestRecordRouterNoHealthy(t *testing.T) {
+	const group, empty = "test-group-RecordRouterNoHealthy", ""
+
+	beforeGroup := testutil.ToFloat64(routerNoHealthyProvidersTotal.WithLabelValues(group))
+	beforeEmpty := testutil.ToFloat64(routerNoHealthyProvidersTotal.WithLabelValues(empty))
+
+	RecordRouterNoHealthy(group)
+	RecordRouterNoHealthy(group)
+	RecordRouterNoHealthy(empty)
+
+	assert.Equal(t, beforeGroup+2, testutil.ToFloat64(routerNoHealthyProvidersTotal.WithLabelValues(group)))
+	assert.Equal(t, beforeEmpty+1, testutil.ToFloat64(routerNoHealthyProvidersTotal.WithLabelValues(empty)))
+}
+
 func TestStatusClass(t *testing.T) {
 	cases := []struct {
 		status int

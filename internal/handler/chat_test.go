@@ -22,6 +22,7 @@ import (
 	"github.com/M4cr0Chen/llm-gateway/internal/router/strategy"
 )
 
+
 // mockProvider implements provider.Provider for testing.
 type mockProvider struct {
 	name       string
@@ -319,6 +320,98 @@ func TestHandleChatCompletion_AllProvidersDown(t *testing.T) {
 	var apiErr model.APIError
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &apiErr))
 	assert.Equal(t, "all_providers_down", apiErr.Error.Code)
+}
+
+// fallbackTestRouter builds a Router whose model group has two
+// candidates, each registered as a HealthTrackingProvider (so the
+// in-decorator retry budget is 0 — the Router's fallback is what's
+// under test). primaryModel and secondaryModel are distinct so the
+// registry doesn't silently overwrite one mapping with the other.
+func fallbackTestRouter(t *testing.T, primary, secondary *mockProvider, maxAttempts int) router.Router {
+	t.Helper()
+	primaryName, secondaryName := "ht-"+primary.name, "ht-"+secondary.name
+	primaryModel, secondaryModel := primary.models[0], secondary.models[0]
+
+	healthCfg := provider.HealthConfig{FailureThreshold: 10, CooldownPeriod: time.Hour}
+	retryCfg := provider.RetryConfig{MaxRetries: 0}
+	primaryTracked := provider.NewHealthTrackingProvider(primary, healthCfg, retryCfg)
+	secondaryTracked := provider.NewHealthTrackingProvider(secondary, healthCfg, retryCfg)
+
+	reg := provider.NewRegistry()
+	reg.Register(primaryTracked, []string{primaryModel})
+	reg.Register(secondaryTracked, []string{secondaryModel})
+
+	groupName := "ht-group-" + primary.name + "-" + secondary.name
+	cfg := config.RoutingConfig{
+		DefaultStrategy: "priority",
+		MaxAttempts:     maxAttempts,
+		ModelGroups: map[string]config.ModelGroupConfig{
+			groupName: {
+				Candidates: []config.CandidateConfig{
+					{Provider: primaryName, Model: primaryModel, Priority: 0, Weight: 1},
+					{Provider: secondaryName, Model: secondaryModel, Priority: 1, Weight: 1},
+				},
+			},
+		},
+	}
+	providersCfg := map[string]config.ProviderConfig{primaryName: {}, secondaryName: {}}
+	rtr, err := router.NewRouter(reg, cfg, providersCfg, strategy.Build)
+	require.NoError(t, err)
+	return rtr
+}
+
+func fallbackGroupName(primary, secondary *mockProvider) string {
+	return "ht-group-" + primary.name + "-" + secondary.name
+}
+
+func TestHandleChatCompletion_FallbackSucceeds(t *testing.T) {
+	primary := &mockProvider{name: "fb-primary", models: []string{"fb-primary-model"},
+		chatErr: &model.ProviderError{StatusCode: http.StatusServiceUnavailable, Type: "upstream_error", Message: "primary down", Retryable: true}}
+	secondary := &mockProvider{name: "fb-secondary", models: []string{"fb-secondary-model"},
+		resp: sampleResponse()}
+
+	ch := handler.NewChatHandler(fallbackTestRouter(t, primary, secondary, 3))
+	req := validRequest()
+	req.Model = fallbackGroupName(primary, secondary)
+	w := doRequest(t, ch.HandleChatCompletion, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "fb-secondary", w.Header().Get("X-LLM-Gateway-Provider"))
+	assert.Equal(t, "2", w.Header().Get("X-LLM-Gateway-Attempts"))
+	assert.Equal(t, fallbackGroupName(primary, secondary), w.Header().Get("X-LLM-Gateway-Group"))
+}
+
+func TestHandleChatCompletion_FallbackExhausted(t *testing.T) {
+	primary := &mockProvider{name: "fbe-primary", models: []string{"fbe-primary-model"},
+		chatErr: &model.ProviderError{StatusCode: http.StatusServiceUnavailable, Type: "upstream_error", Message: "primary down", Retryable: true}}
+	secondary := &mockProvider{name: "fbe-secondary", models: []string{"fbe-secondary-model"},
+		chatErr: &model.ProviderError{StatusCode: http.StatusServiceUnavailable, Type: "upstream_error", Message: "secondary down", Retryable: true}}
+
+	ch := handler.NewChatHandler(fallbackTestRouter(t, primary, secondary, 3))
+	req := validRequest()
+	req.Model = fallbackGroupName(primary, secondary)
+	w := doRequest(t, ch.HandleChatCompletion, req)
+
+	assert.Equal(t, http.StatusBadGateway, w.Code)
+	var apiErr model.APIError
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &apiErr))
+	assert.Equal(t, "all 2 providers returned errors", apiErr.Error.Message,
+		"the count is the number of providers actually tried, not the configured max")
+}
+
+func TestHandleChatCompletion_NonRetryable4xxNoFallback(t *testing.T) {
+	primary := &mockProvider{name: "nr-primary", models: []string{"nr-primary-model"},
+		chatErr: &model.ProviderError{StatusCode: http.StatusUnauthorized, Type: "invalid_request_error", Message: "bad key", Retryable: false}}
+	secondary := &mockProvider{name: "nr-secondary", models: []string{"nr-secondary-model"},
+		resp: sampleResponse()}
+
+	ch := handler.NewChatHandler(fallbackTestRouter(t, primary, secondary, 3))
+	req := validRequest()
+	req.Model = fallbackGroupName(primary, secondary)
+	w := doRequest(t, ch.HandleChatCompletion, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code,
+		"non-retryable 4xx must pass through; fallback would mask the upstream's verdict")
 }
 
 // midStreamErrProvider sends chunks then an error event.
