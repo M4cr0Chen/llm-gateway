@@ -4,9 +4,8 @@ A smart proxy layer between clients and LLM providers (OpenAI, Anthropic,
 Google, self-hosted), handling a unified API, routing, caching, rate
 limiting, cost control, and observability.
 
-Design rationale, architecture diagrams, and roadmap live in
-[`CLAUDE.md`](CLAUDE.md), [`docs/architecture.md`](docs/architecture.md),
-and [`ROADMAP.md`](ROADMAP.md).
+Design rationale and architecture diagrams live in
+[`CLAUDE.md`](CLAUDE.md), [`docs/architecture.md`](docs/architecture.md).
 
 ## Quickstart
 
