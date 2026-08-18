@@ -5,17 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/M4cr0Chen/llm-gateway/internal/auth"
 	"github.com/M4cr0Chen/llm-gateway/internal/middleware"
 	"github.com/M4cr0Chen/llm-gateway/internal/model"
-	"github.com/M4cr0Chen/llm-gateway/internal/provider"
 	"github.com/M4cr0Chen/llm-gateway/internal/router"
 )
 
 // ChatHandler serves the /v1/chat/completions endpoint. It owns the
 // strategy-aware router; the registry is no longer threaded in here —
-// resolution happens inside router.Route.
+// resolution, the fallback loop, and the actual upstream call all live
+// inside router.Route / router.RouteStream.
 type ChatHandler struct {
 	router router.Router
 }
@@ -55,33 +56,18 @@ func (h *ChatHandler) HandleChatCompletion(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	p, decision, err := h.router.Route(r.Context(), &req, routerMeta(r))
-	if err != nil {
-		writeRouterError(w, req.Model, err)
-		return
-	}
-	// Rewrite req.Model to the canonical name the upstream provider
-	// expects. The original value may have been a model-group name
-	// ("fast", "smart") or a local alias ("claude") that the provider
-	// API does not recognise. For concrete model requests the rewrite
-	// is a no-op because decision.Model == req.Model.
-	req.Model = decision.Model
-	middleware.SetModel(r.Context(), decision.Model)
-	middleware.SetProvider(r.Context(), decision.Provider)
-	middleware.SetStrategy(r.Context(), decision.Strategy)
-	middleware.SetGroup(r.Context(), decision.Group)
-
 	if req.Stream {
-		h.handleStream(w, r, p, &req, decision)
+		h.handleStream(w, r, &req)
 	} else {
-		h.handleNonStream(w, r, p, &req, decision)
+		h.handleNonStream(w, r, &req)
 	}
 }
 
-func (h *ChatHandler) handleNonStream(w http.ResponseWriter, r *http.Request, p provider.Provider, req *model.ChatCompletionRequest, decision router.Decision) {
-	resp, err := p.ChatCompletion(r.Context(), req)
+func (h *ChatHandler) handleNonStream(w http.ResponseWriter, r *http.Request, req *model.ChatCompletionRequest) {
+	resp, decision, err := h.router.Route(r.Context(), req, routerMeta(r))
+	stampDecisionContext(r, decision)
 	if err != nil {
-		handleProviderError(w, err)
+		writeRouterError(w, req.Model, decision, err)
 		return
 	}
 
@@ -92,12 +78,13 @@ func (h *ChatHandler) handleNonStream(w http.ResponseWriter, r *http.Request, p 
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, p provider.Provider, req *model.ChatCompletionRequest, decision router.Decision) {
+func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, req *model.ChatCompletionRequest) {
 	logger := middleware.LoggerFromContext(r.Context())
 
-	ch, err := p.ChatCompletionStream(r.Context(), req)
+	ch, decision, err := h.router.RouteStream(r.Context(), req, routerMeta(r))
+	stampDecisionContext(r, decision)
 	if err != nil {
-		handleProviderError(w, err)
+		writeRouterError(w, req.Model, decision, err)
 		return
 	}
 
@@ -118,7 +105,7 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, p pro
 
 	for evt := range ch {
 		if evt.Err != nil {
-			logger.Warn("stream error from provider", "error", evt.Err, "provider", p.Name())
+			logger.Warn("stream error from provider", "error", evt.Err, "provider", decision.Provider)
 			// Drain remaining events to unblock the provider goroutine.
 			for range ch {
 			}
@@ -145,9 +132,8 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, p pro
 }
 
 // routerMeta builds router.RequestMeta from the per-request middleware
-// state. OrgID/KeyID come from the auth layer; the rest of the struct is
-// reserved for the M4.2 fallback loop (Attempt, TriedNames) and the
-// router itself (Group).
+// state. OrgID/KeyID come from the auth layer; Attempt and TriedNames
+// stay zero/nil at entry — the Router populates them as it iterates.
 func routerMeta(r *http.Request) router.RequestMeta {
 	meta := router.RequestMeta{}
 	if info, ok := auth.KeyInfoFromContext(r.Context()); ok {
@@ -157,34 +143,62 @@ func routerMeta(r *http.Request) router.RequestMeta {
 	return meta
 }
 
+// stampDecisionContext mirrors the routing Decision into the per-request
+// middleware state so the access logger can include it on every line
+// (including the error paths, where setRoutingHeaders is not called).
+func stampDecisionContext(r *http.Request, decision router.Decision) {
+	ctx := r.Context()
+	if decision.Model != "" {
+		middleware.SetModel(ctx, decision.Model)
+	}
+	if decision.Provider != "" {
+		middleware.SetProvider(ctx, decision.Provider)
+	}
+	if decision.Strategy != "" {
+		middleware.SetStrategy(ctx, decision.Strategy)
+	}
+	if decision.Group != "" {
+		middleware.SetGroup(ctx, decision.Group)
+	}
+	if decision.Attempts > 0 {
+		middleware.SetAttempts(ctx, decision.Attempts)
+	}
+}
+
 // setRoutingHeaders stamps the X-LLM-Gateway-* headers that describe the
 // routing decision. Group is omitted entirely when empty (concrete or
-// alias request); Attempts is hard-coded to "1" in M4.1 since the
-// fallback loop is deferred.
+// alias request).
 func setRoutingHeaders(h http.Header, decision router.Decision) {
 	h.Set("X-LLM-Gateway-Provider", decision.Provider)
 	h.Set("X-LLM-Gateway-Strategy", decision.Strategy)
-	h.Set("X-LLM-Gateway-Attempts", "1")
+	h.Set("X-LLM-Gateway-Attempts", strconv.Itoa(decision.Attempts))
 	if decision.Group != "" {
 		h.Set("X-LLM-Gateway-Group", decision.Group)
 	}
 }
 
 // writeRouterError maps a router-layer error to the documented HTTP
-// shape. ErrUnknownModel → 400 invalid_model (matches M1 behaviour);
-// ErrNoHealthyProviders → 503 all_providers_down. Anything else is an
-// internal_error — the router does not emit other typed errors today.
-func writeRouterError(w http.ResponseWriter, modelName string, err error) {
+// shape:
+//
+//   - ErrUnknownModel        → 400 invalid_model
+//   - ErrNoHealthyProviders  → 503 all_providers_down
+//   - else, attempts > 1     → 502 with "all N providers returned errors"
+//     (every fallback hop failed)
+//   - else                   → handleProviderError (preserves 4xx
+//     passthrough; maps 5xx to 502)
+func writeRouterError(w http.ResponseWriter, modelName string, decision router.Decision, err error) {
 	switch {
 	case errors.Is(err, router.ErrUnknownModel):
 		WriteError(w, http.StatusBadRequest, "invalid_request_error", "invalid_model",
 			fmt.Sprintf("unknown model %q", modelName))
 	case errors.Is(err, router.ErrNoHealthyProviders):
-		WriteError(w, http.StatusServiceUnavailable, "service_unavailable", "all_providers_down",
-			"all candidate providers are unavailable")
+		handleNoHealthyProviders(w)
 	default:
-		WriteError(w, http.StatusInternalServerError, "internal_error", "internal_error",
-			fmt.Sprintf("routing failed: %v", err))
+		if decision.Attempts > 1 {
+			handleFallbackExhausted(w, decision.Attempts)
+			return
+		}
+		handleProviderError(w, err)
 	}
 }
 

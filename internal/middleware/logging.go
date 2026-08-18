@@ -78,6 +78,12 @@ func appendRequestInfoAttrs(attrs []slog.Attr, info *RequestInfo) []slog.Attr {
 	if info.Group != "" {
 		attrs = append(attrs, slog.String("group", info.Group))
 	}
+	// attempts is only interesting when the Router fell back across
+	// providers. The first-try-success case dominates steady state, so
+	// we omit the field then to keep the hot path's log line short.
+	if info.Attempts > 1 {
+		attrs = append(attrs, slog.Int("attempts", info.Attempts))
+	}
 	if info.PromptTokens > 0 || info.CompletionTokens > 0 {
 		attrs = append(attrs,
 			slog.Int("prompt_tokens", info.PromptTokens),

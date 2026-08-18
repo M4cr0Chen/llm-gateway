@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -40,4 +41,22 @@ func handleProviderError(w http.ResponseWriter, err error) {
 	}
 
 	apierr.Write(w, http.StatusBadGateway, "upstream_error", "provider_error", "upstream provider error")
+}
+
+// handleNoHealthyProviders writes the 503 all_providers_down response
+// emitted when every candidate's circuit breaker was open at the start
+// of routing (M4.2). The shape matches docs/api-spec.md.
+func handleNoHealthyProviders(w http.ResponseWriter) {
+	apierr.Write(w, http.StatusServiceUnavailable, "service_unavailable", "all_providers_down",
+		"all candidate providers are unavailable")
+}
+
+// handleFallbackExhausted writes the 502 provider_error response emitted
+// when the Router tried `attempts` distinct providers and every one
+// returned a retryable error. attempts is the count made, not the
+// configured max_attempts (those can diverge when the healthy candidate
+// pool shrinks mid-request).
+func handleFallbackExhausted(w http.ResponseWriter, attempts int) {
+	apierr.Write(w, http.StatusBadGateway, "upstream_error", "provider_error",
+		fmt.Sprintf("all %d providers returned errors", attempts))
 }

@@ -100,17 +100,25 @@ func defaultSkipWarn(providerName, modelName string) {
 	)
 }
 
-// filterHealthy drops candidates whose provider's circuit breaker is
-// open. Providers that are not health-tracked (HealthFor returns nil)
-// are passed through — that case is primarily tests using bare mocks,
-// where assuming "healthy" is the right default.
+// filterHealthy returns the candidates whose provider circuit breaker is
+// currently closed (or half-open) AND whose name is not already in tried.
+// Providers that are not health-tracked (HealthFor returns nil) are
+// passed through — that case is primarily tests using bare mocks, where
+// assuming "healthy" is the right default.
 //
-// The result reuses the input slice's underlying array to avoid an
-// allocation on the hot path. Callers must not retain the input slice
-// after filterHealthy returns.
-func filterHealthy(candidates []Candidate) []Candidate {
-	out := candidates[:0]
+// The result is a fresh slice; the input slice is not mutated. The
+// M4.2 fallback loop calls this once per attempt, so a destructive
+// in-place filter (the M4.1 implementation) would corrupt the candidate
+// set across iterations. Candidate count is small (3–5), so the
+// per-attempt allocation is negligible.
+//
+// A nil tried map is treated as empty — no candidates excluded by name.
+func filterHealthy(candidates []Candidate, tried map[string]struct{}) []Candidate {
+	out := make([]Candidate, 0, len(candidates))
 	for _, c := range candidates {
+		if _, skip := tried[c.Provider.Name()]; skip {
+			continue
+		}
 		h := provider.HealthFor(c.Provider)
 		if h == nil || h.IsHealthy() {
 			out = append(out, c)
